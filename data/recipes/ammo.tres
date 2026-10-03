@@ -1,0 +1,20 @@
+[gd_resource type="Resource" script_class="RecipeDef" load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://src/defs/recipe_def.gd" id="1_def"]
+
+[resource]
+script = ExtResource("1_def")
+id = "ammo"
+display_name = "Munição"
+inputs = {
+"scrap": 4
+}
+outputs = {
+"ammo": 5
+}
+work_ticks = 200
+skill = "mechanics"
+requires = {
+"mechanics": 3
+}
+target = 60

@@ -1,0 +1,13 @@
+[gd_resource type="Resource" script_class="ImprovementDef" load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://src/defs/improvement_def.gd" id="1_def"]
+
+[resource]
+script = ExtResource("1_def")
+id = "crop_rotation"
+display_name = "Rotação de culturas"
+requires = {
+"farming": 3
+}
+stat = "crop_yield"
+value = 1.5

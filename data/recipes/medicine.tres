@@ -1,0 +1,21 @@
+[gd_resource type="Resource" script_class="RecipeDef" load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://src/defs/recipe_def.gd" id="1_def"]
+
+[resource]
+script = ExtResource("1_def")
+id = "medicine"
+display_name = "Remédios"
+inputs = {
+"food": 5,
+"water": 2
+}
+outputs = {
+"medicine": 1
+}
+work_ticks = 300
+skill = "medicine"
+requires = {
+"medicine": 3
+}
+target = 10

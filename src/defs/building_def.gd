@@ -24,6 +24,10 @@ extends Resource
 @export var trap_damage := 0.0
 ## Guards who can shoot from inside, out of reach of zombies.
 @export var guard_slots := 0
+## Recipes are made here.
+@export var is_workshop := false
+## Skill -> level the community must know before this can be built.
+@export var requires: Dictionary = {}
 ## Placed by dragging, one per cell (fences and walls).
 @export var drag_place := false
 @export var buildable := true

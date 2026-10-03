@@ -22,6 +22,7 @@ var _resources: Label
 var _info: Label
 var _jobs: HBoxContainer
 var _job_buttons := {}  # work type -> Button
+var _build_buttons := {}  # building id -> Button
 var _offers: VBoxContainer
 var _offers_shown: Array[int] = []
 var _toast: Label
@@ -76,8 +77,9 @@ func _ready() -> void:
 	for id: String in Defs.BUILDINGS:
 		var def := Defs.building(id)
 		if def.buildable:
-			var label := "%s (%s)" % [def.display_name, Defs.format_cost(def.cost)]
-			actions.add_child(_button(label, func() -> void: build_requested.emit(id)))
+			var button := _button(_build_label(def, false), func() -> void: build_requested.emit(id))
+			actions.add_child(button)
+			_build_buttons[id] = button
 
 	var offers_panel := PanelContainer.new()
 	offers_panel.grow_horizontal = Control.GROW_DIRECTION_BEGIN
@@ -131,6 +133,14 @@ func _process(delta: float) -> void:
 	parts.append("Pausado" if speed == 0.0 else "%dx" % int(speed))
 	_resources.text = "  " + "   |   ".join(parts)
 	_info.text = _describe_selection()
+
+	# Buildings the community does not know how to make are greyed out, saying what is missing.
+	for id: String in _build_buttons:
+		var button: Button = _build_buttons[id]
+		var locked := not state.can_build(id)
+		if button.disabled != locked:
+			button.disabled = locked
+			button.text = _build_label(Defs.building(id), locked)
 	_refresh_offers()
 
 	# The toggles mirror the first selected person; a click applies to the whole selection.
@@ -196,7 +206,48 @@ func _describe_selection() -> String:
 	var poi: SimPoi = state.pois.get(controller.selected_poi)
 	if poi != null:
 		return _describe_poi(poi)
-	return "Arraste para selecionar pessoas. WASD move a câmera, scroll dá zoom, B constrói casa."
+	return "Arraste para selecionar pessoas. WASD move a câmera, scroll dá zoom, B constrói casa.\n" \
+			+ _describe_knowledge()
+
+
+func _build_label(def: BuildingDef, locked: bool) -> String:
+	var label := "%s (%s)" % [def.display_name, Defs.format_cost(def.cost)]
+	if locked:
+		label += " requer %s" % Knowledge.requirement_text(def.requires)
+	return label
+
+
+## What the community knows, the books it has and the improvements that follow.
+func _describe_knowledge() -> String:
+	var known := PackedStringArray()
+	var books := PackedStringArray()
+	for skill in Defs.SKILLS:
+		if state.knowledge(skill) > 0:
+			known.append("%s %d" % [Defs.SKILL_NAMES[skill], state.knowledge(skill)])
+		if state.library.has(skill):
+			books.append("%s %d" % [Defs.SKILL_NAMES[skill], int(state.library[skill])])
+	var lines := PackedStringArray(["Conhecimento: %s" % (", ".join(known) if not known.is_empty() else "nenhum")])
+	if not books.is_empty():
+		lines.append("Livros: %s" % ", ".join(books))
+	var gains := PackedStringArray()
+	for def: ImprovementDef in Defs.IMPROVEMENTS.values():
+		if Knowledge.knows(state, def.requires):
+			gains.append(def.display_name)
+	if not gains.is_empty():
+		lines.append("Melhorias: %s" % ", ".join(gains))
+	return "\n".join(lines)
+
+
+func _describe_workshop(b: SimBuilding) -> String:
+	var lines := PackedStringArray([b.get_def().display_name + ":"])
+	for def: RecipeDef in Defs.RECIPES.values():
+		var status := "requer %s" % Knowledge.requirement_text(def.requires)
+		if Knowledge.unlocked(state, def.requires):
+			var product: String = def.outputs.keys()[0]
+			status = "estoque cheio" if state.stockpile[product] >= def.target else "disponível"
+		lines.append("  %s (%s → %s): %s" % [
+			def.display_name, Defs.format_cost(def.inputs), Defs.format_cost(def.outputs), status])
+	return "\n".join(lines)
 
 
 func _describe_poi(poi: SimPoi) -> String:
@@ -214,6 +265,8 @@ func _describe_building(b: SimBuilding) -> String:
 		@warning_ignore("integer_division")
 		return "%s (em construção: %d%%)" % [def.display_name, 100 * b.progress / def.build_ticks]
 	var condition := "   Estrutura %d/%d" % [b.hp, def.max_hp] if b.is_damaged() else ""
+	if def.is_workshop:
+		return _describe_workshop(b) + condition
 	if def.beds > 0:
 		return "%s: %d de %d camas ocupadas, %d abrigados%s" % [
 			def.display_name, b.occupants, def.beds, b.sheltered, condition]
@@ -232,7 +285,7 @@ func _describe_building(b: SimBuilding) -> String:
 func _describe_person(p: SimPerson) -> String:
 	var skills := PackedStringArray()
 	for skill: String in p.skills:
-		if p.skills[skill] > 0.0:
+		if p.skills[skill] >= 1.0:
 			skills.append("%s %d" % [Defs.SKILL_NAMES[skill], int(p.skills[skill])])
 	return "%s, %d anos: %s%s\nSaciedade %d%%   Água %d%%   Energia %d%%   Saúde %d%%%s\nHabilidades: %s" % [
 		p.full_name(), int(p.age(state.day())), _activity(p), " (ordem direta)" if p.ordered else "",
@@ -254,6 +307,12 @@ func _activity(p: SimPerson) -> String:
 			if p.expedition >= 0:
 				return "voltando da expedição" + (" com %s" % what if p.carry_amount > 0 else "")
 			return "levando %s para o estoque" % what
+		SimPerson.State.TO_STUDY, SimPerson.State.STUDYING:
+			var subject: String = Defs.SKILL_NAMES.get(p.study_skill, "")
+			return "escrevendo um livro de %s" % subject if p.writing else "estudando %s" % subject
+		SimPerson.State.TO_CRAFT, SimPerson.State.CRAFTING:
+			var recipe: RecipeDef = Defs.RECIPES.get(p.recipe)
+			return "na oficina: %s" % (recipe.display_name.to_lower() if recipe != null else "")
 		SimPerson.State.TO_POI:
 			return "em expedição para %s" % (state.pois[p.expedition] as SimPoi).display_name()
 		SimPerson.State.LOOTING:

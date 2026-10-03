@@ -5,7 +5,7 @@ extends RefCounted
 ## through the order_* / place_building / set_job methods.
 
 const TICKS_PER_SECOND := 10
-const SAVE_VERSION := 6
+const SAVE_VERSION := 7
 const NO_CELL := Vector2i(-1, -1)
 ## Tick of the day at which night falls and new zombies reach the map edge.
 const DUSK_TICK := int((Defs.NIGHT_START - Defs.START_HOUR) / 24.0 * Defs.DAY_TICKS)
@@ -29,6 +29,10 @@ var explored := PackedByteArray()
 ## Groups asking to join: {"id", "poi" (-1 if they came to the base), "expires", "people"},
 ## each of the people a {"first_name", "surname", "sex", "age", "skills"}.
 var offers := []
+## Books the community has: skill -> level of the best one.
+var library := {}
+## False lets anything be built or made, whatever the community knows.
+var locks_enabled := true
 ## False stops survivors from turning up at the base.
 var arrivals_enabled := true
 ## Everyone who died: {"name", "age", "cause", "day"}.
@@ -70,6 +74,10 @@ var _decisions_left := 0
 var _work_cache_tick := -1
 var _work_count := {}  # work type -> people doing it
 var _sites: Array[SimBuilding] = []  # under construction or damaged
+var _workshops: Array[SimBuilding] = []
+var _homes: Array[SimBuilding] = []  # finished buildings with beds
+var _top := {}  # skill -> highest level anyone has
+var _knowledge_dirty := true
 var _fallow: Array[SimBuilding] = []  # crop plots waiting to be planted
 var _ripe: Array[SimBuilding] = []  # crop plots ready to harvest
 var _threats: Array[SimZombie] = []  # zombies that were hostile at the start of this tick
@@ -255,6 +263,16 @@ func total_beds() -> int:
 	return total
 
 
+## How well the community knows a skill: the level of its best member.
+func knowledge(skill: String) -> int:
+	return Knowledge.level(self, skill)
+
+
+## Whether the community knows enough to build this.
+func can_build(def_id: String) -> bool:
+	return Knowledge.unlocked(self, Defs.building(def_id).requires)
+
+
 func can_afford(cost: Dictionary) -> bool:
 	for kind: String in cost:
 		if stockpile[kind] < cost[kind]:
@@ -425,7 +443,7 @@ func set_job(ids: Array[int], work: String, allowed: bool) -> void:
 ## Returns the new building id, or -1 if it cannot be placed or paid for.
 func place_building(def_id: String, cell: Vector2i) -> int:
 	var def := Defs.building(def_id)
-	if not can_place(def_id, cell) or not can_afford(def.cost):
+	if not can_build(def_id) or not can_place(def_id, cell) or not can_afford(def.cost):
 		return -1
 	_pay(def.cost)
 	var b := SimBuilding.new()
@@ -492,6 +510,7 @@ func step() -> void:
 	tick += 1
 	_paths_left = Defs.PATHS_PER_TICK
 	_decisions_left = Defs.WORK_DECISIONS_PER_TICK
+	_knowledge_dirty = true
 	shots.clear()
 	_survey()
 	for p: SimPerson in people.values():
@@ -536,13 +555,14 @@ func _survey() -> void:
 	for b: SimBuilding in buildings.values():
 		if b.ripe_tick > 0 and tick >= b.ripe_tick:
 			b.ripe_tick = 0
-			b.stock = b.get_def().crop_yield
+			b.stock = roundi(b.get_def().crop_yield * Knowledge.bonus(self, "crop_yield"))
 		if b.occupants + b.sheltered > 0:
 			_homes_in_use.append(b)
 		if b.is_complete() and b.get_def().beds > 0:
 			_noise[_noise_bucket(Vector2(b.cell))] += home_noise
 	for p: SimPerson in people.values():
-		var quiet := p.state == SimPerson.State.IDLE or p.state == SimPerson.State.SLEEPING
+		var quiet := p.state == SimPerson.State.IDLE or p.state == SimPerson.State.SLEEPING \
+				or p.state == SimPerson.State.STUDYING
 		if p.inside < 0 and not quiet:
 			_noise[_noise_bucket(p.pos)] += Defs.NOISE_PERSON
 	for bucket: int in _shot_noise.keys():
@@ -579,7 +599,8 @@ func _tick_needs(p: SimPerson) -> bool:
 			and p.state != SimPerson.State.TO_SHELTER and _nearest_zombie(p.pos, Defs.FLEE_RADIUS) == null:
 		stockpile["medicine"] -= 1
 		p.wounded = false
-		p.health = minf(1.0, p.health + Defs.TREATMENT_HEAL)
+		p.health = minf(1.0, p.health + Defs.TREATMENT_HEAL * Knowledge.bonus(self, "treatment_heal"))
+		_practice_medic()
 		events.append("%s recebeu tratamento" % p.full_name())
 
 	var damage := 0.0
@@ -614,11 +635,13 @@ func _hurt_person(p: SimPerson, amount: float, cause: String) -> void:
 
 
 func _kill(p: SimPerson, cause: String) -> void:
+	var known := Knowledge.levels(self)
 	_go_outside(p)
 	_people_index.remove(p.id, p.pos)
 	people.erase(p.id)
 	memorial.append({"name": p.full_name(), "age": int(p.age(day())), "cause": cause, "day": day()})
 	events.append("%s morreu: %s" % [p.full_name(), cause])
+	Knowledge.announce_loss(self, known, p.first_name)
 
 
 func _tick_person(p: SimPerson) -> void:
@@ -668,10 +691,12 @@ func _tick_person(p: SimPerson) -> void:
 				p.carry_kind = p.gather_kind
 				p.carry_amount = 0
 			var effort := Defs.CHILD_WORK_FACTOR if p.is_child(day()) else 1.0
+			var skill := _gather_skill(p)
 			p.work_ticks += 1
-			if p.work_ticks >= Defs.GATHER_TICKS_PER_UNIT / effort:
+			if p.work_ticks >= Defs.GATHER_TICKS_PER_UNIT / (effort * Knowledge.speed(p, skill)):
 				p.work_ticks = 0
 				p.carry_amount += 1
+				Knowledge.practice(p, skill, Defs.PRACTICE_PER_TICK * Defs.GATHER_TICKS_PER_UNIT)
 				_take_from_source(p.target_cell)
 			if p.carry_amount >= Defs.CARRY_CAPACITY * effort:
 				p.state = SimPerson.State.TO_DROPOFF
@@ -714,11 +739,14 @@ func _tick_person(p: SimPerson) -> void:
 			if site == null:
 				p.state = SimPerson.State.IDLE
 			elif not site.is_complete():
-				site.progress += 1
+				site.progress += 1 + _skill_bonus(p, "building")
+				Knowledge.practice(p, "building", Defs.PRACTICE_PER_TICK)
 			elif site.is_damaged():
-				site.hp = mini(site.get_def().max_hp, site.hp + Defs.REPAIR_PER_TICK)
+				site.hp = mini(site.get_def().max_hp, site.hp + Defs.REPAIR_PER_TICK * (1 + _skill_bonus(p, "building")))
+				Knowledge.practice(p, "building", Defs.PRACTICE_PER_TICK)
 			elif site.is_fallow():
-				site.work += 1
+				site.work += 1 + _skill_bonus(p, "farming")
+				Knowledge.practice(p, "farming", Defs.PRACTICE_PER_TICK)
 				if site.work >= Defs.PLANT_TICKS:
 					site.work = 0
 					site.ripe_tick = tick + Defs.GROW_TICKS
@@ -745,12 +773,14 @@ func _tick_person(p: SimPerson) -> void:
 				p.state = SimPerson.State.TO_HUNT  # it wandered off
 			else:
 				p.work_ticks += 1
-				if p.work_ticks >= Defs.HUNT_TICKS:
+				if p.work_ticks >= Defs.HUNT_TICKS / Knowledge.speed(p, "hunting"):
+					Knowledge.practice(p, "hunting", Defs.PRACTICE_PER_KILL)
 					animals.erase(prey.id)
 					var carcass := _drop_node(prey.cell(), "carcass")
 					if carcass == NO_CELL:
 						p.state = SimPerson.State.IDLE
 					else:
+						nodes[carcass]["amount"] = roundi(nodes[carcass]["amount"] * Knowledge.bonus(self, "carcass"))
 						_begin_gather(p, carcass, "food")
 
 		SimPerson.State.TO_BED:
@@ -803,6 +833,24 @@ func _tick_person(p: SimPerson) -> void:
 		SimPerson.State.TO_POI:
 			Exploration.tick_to_poi(self, p)
 
+		SimPerson.State.TO_STUDY, SimPerson.State.TO_CRAFT:
+			var place: SimBuilding = buildings.get(p.target_building)
+			if place == null or not place.is_complete():
+				p.path.clear()
+				p.state = SimPerson.State.IDLE
+			elif _advance(p):
+				if _is_adjacent(p.cell(), place.cell, place.get_def().size):
+					p.work_ticks = 0
+					p.state = SimPerson.State.STUDYING if p.state == SimPerson.State.TO_STUDY else SimPerson.State.CRAFTING
+				elif _approach(p, place.cell, place.get_def().size) == Plan.FAIL:
+					p.state = SimPerson.State.IDLE
+
+		SimPerson.State.STUDYING:
+			Knowledge.tick_study(self, p)
+
+		SimPerson.State.CRAFTING:
+			Knowledge.tick_craft(self, p)
+
 		SimPerson.State.LOOTING:
 			Exploration.tick_looting(self, p)
 
@@ -848,6 +896,31 @@ func _begin_gather(p: SimPerson, cell: Vector2i, yields: String) -> void:
 	p.gather_kind = yields
 	p.work_ticks = 0
 	p.state = SimPerson.State.TO_RESOURCE
+
+
+## Skill used, and trained, by what the person is gathering.
+func _gather_skill(p: SimPerson) -> String:
+	if nodes.has(p.target_cell):
+		if nodes[p.target_cell]["kind"] == "carcass":
+			return "hunting"
+	elif p.gather_kind == "food":
+		return "farming"  # food that is not on a node comes from a crop plot
+	return Defs.GATHER_SKILL.get(p.gather_kind, "foraging")
+
+
+## Extra work done this tick thanks to skill: on average a tenth of a unit per level.
+func _skill_bonus(p: SimPerson, skill: String) -> int:
+	return 1 if tick % 10 < int(p.skills.get(skill, 0.0)) else 0
+
+
+## Treating a wound is practice for whoever knows most about medicine.
+func _practice_medic() -> void:
+	var medic: SimPerson = null
+	for p: SimPerson in people.values():
+		if medic == null or p.skills["medicine"] > medic.skills["medicine"]:
+			medic = p
+	if medic != null:
+		Knowledge.practice(medic, "medicine", Defs.PRACTICE_PER_TREATMENT)
 
 
 func _take_from_source(cell: Vector2i) -> void:
@@ -971,6 +1044,7 @@ func _tick_defending(p: SimPerson) -> void:
 				_shoot(p, z, origin)
 			else:
 				p.cooldown = Defs.MELEE_TICKS
+				Knowledge.practice(p, "combat", Defs.PRACTICE_PER_SHOT)
 				_hurt_zombie(z, Defs.MELEE_DAMAGE + 0.03 * float(p.skills.get("combat", 0.0)))
 	elif p.inside >= 0:
 		pass  # out of range from the tower: wait for it to come closer
@@ -1002,6 +1076,7 @@ func _stand_down(p: SimPerson) -> void:
 func _shoot(p: SimPerson, z: SimZombie, origin: Vector2) -> void:
 	stockpile["ammo"] -= 1
 	p.cooldown = Defs.SHOT_TICKS
+	Knowledge.practice(p, "combat", Defs.PRACTICE_PER_SHOT)
 	shots.append([origin, z.pos])
 	var bucket := _noise_bucket(origin)
 	_shot_noise[bucket] = float(_shot_noise.get(bucket, 0.0)) + Defs.NOISE_SHOT
@@ -1131,6 +1206,11 @@ func _work_score(p: SimPerson, work: String) -> float:
 			score = 0.5 * need("wood")
 		"scrap":
 			score = 0.3 * need("scrap")
+		"craft":
+			score = Knowledge.craft_score(self) if not _workshops.is_empty() else 0.0
+		"study":
+			# Something for spare time: any real need comes first.
+			score = 0.15 if not _homes.is_empty() and not Knowledge.study_plan(self, p).is_empty() else 0.0
 	if work == p.last_work:
 		score *= 1.3
 	return score / (1.0 + 0.5 * int(_work_count.get(work, 0)))
@@ -1161,6 +1241,23 @@ func _start_work(p: SimPerson, work: String) -> bool:
 				return false
 			p.hunt_target = prey.id
 			p.state = SimPerson.State.TO_HUNT
+		"craft":
+			var def := Knowledge.pick_recipe(self)
+			var shop := _nearest_building(_workshops, p.cell())
+			if def == null or shop == null:
+				return false
+			p.recipe = def.id
+			p.target_building = shop.id
+			p.state = SimPerson.State.TO_CRAFT
+		"study":
+			var plan := Knowledge.study_plan(self, p)
+			var desk := _nearest_building(_homes, p.cell())
+			if plan.is_empty() or desk == null:
+				return false
+			p.study_skill = plan[0]
+			p.writing = plan[1]
+			p.target_building = desk.id
+			p.state = SimPerson.State.TO_STUDY
 		_:
 			var kind: String = Defs.WORK_YIELD[work]
 			var cell := _find_work_source(p, kind)
@@ -1220,7 +1317,13 @@ func _refresh_work_cache() -> void:
 	_sites.clear()
 	_fallow.clear()
 	_ripe.clear()
+	_workshops.clear()
+	_homes.clear()
 	for b: SimBuilding in buildings.values():
+		if b.is_complete() and b.get_def().is_workshop:
+			_workshops.append(b)
+		if b.is_complete() and b.get_def().beds > 0:
+			_homes.append(b)
 		if not b.is_complete() or b.is_damaged():
 			_sites.append(b)
 		elif b.is_fallow():
@@ -1660,6 +1763,7 @@ func _drop_node(cell: Vector2i, kind: String) -> Vector2i:
 
 func _add_person(p: SimPerson) -> void:
 	people[p.id] = p
+	_knowledge_dirty = true
 	_people_index.add(p.id, p.pos)
 	var b: SimBuilding = buildings.get(p.inside)
 	if b != null:
@@ -1741,6 +1845,8 @@ func to_dict() -> Dictionary:
 		"next_offer_id": _next_offer_id,
 		"zombies_enabled": zombies_enabled,
 		"arrivals_enabled": arrivals_enabled,
+		"locks_enabled": locks_enabled,
+		"library": library.duplicate(),
 		"explored": Marshalls.raw_to_base64(explored),
 		"offers": offers.duplicate(true),
 		"pois": pois.values().map(func(poi: SimPoi) -> Dictionary: return poi.to_dict()),
@@ -1770,6 +1876,9 @@ static func from_dict(d: Dictionary) -> GameState:
 	s._next_offer_id = int(d["next_offer_id"])
 	s.zombies_enabled = d["zombies_enabled"]
 	s.arrivals_enabled = d["arrivals_enabled"]
+	s.locks_enabled = d["locks_enabled"]
+	for skill: String in d["library"]:
+		s.library[skill] = int(d["library"][skill])
 	s.explored = Marshalls.base64_to_raw(d["explored"])
 	for row: Dictionary in d["offers"]:
 		var offer: Dictionary = row.duplicate(true)

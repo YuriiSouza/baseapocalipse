@@ -16,6 +16,9 @@ max_hp = 50
 passable = true
 trap_damage = 0.5
 drag_place = true
+requires = {
+"mechanics": 2
+}
 buildable = true
 color = Color(0.3, 0.28, 0.26, 1)
 height_px = 3.0

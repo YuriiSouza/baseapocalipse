@@ -14,6 +14,9 @@ cost = {
 build_ticks = 300
 max_hp = 200
 guard_slots = 2
+requires = {
+"building": 3
+}
 buildable = true
 color = Color(0.42, 0.3, 0.2, 1)
 height_px = 46.0

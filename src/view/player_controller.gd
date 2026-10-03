@@ -91,8 +91,11 @@ func _unhandled_input(event: InputEvent) -> void:
 func _place(cell: Vector2i, keep_placing: bool) -> void:
 	var id := state.place_building(placing, cell)
 	if id < 0:
-		var affordable := state.can_afford(Defs.building(placing).cost)
-		notice.emit("Não é possível construir aqui" if affordable else "Recursos insuficientes")
+		var def := Defs.building(placing)
+		if not state.can_build(placing):
+			notice.emit("Falta conhecimento: requer %s" % Knowledge.requirement_text(def.requires))
+		else:
+			notice.emit("Não é possível construir aqui" if state.can_afford(def.cost) else "Recursos insuficientes")
 		return
 	state.order_build(selected_people, id)
 	if Defs.building(placing).drag_place:

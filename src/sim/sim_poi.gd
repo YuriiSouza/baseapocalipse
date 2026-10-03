@@ -14,6 +14,9 @@ var loot := {}
 var lurkers := 0
 ## People hiding here, who ask to join when the place is first reached.
 var survivors := 0
+## Skill of a book lying here, or "" for none. Taken by the first to arrive.
+var book := ""
+var book_level := 0
 ## The community knows where it is. Expeditions can only be sent to discovered places.
 var discovered := false
 ## Someone has been here, so what is left is known.
@@ -40,6 +43,7 @@ func to_dict() -> Dictionary:
 	return {
 		"id": id, "kind": kind, "cell": [cell.x, cell.y], "loot": loot.duplicate(),
 		"lurkers": lurkers, "survivors": survivors, "discovered": discovered, "visited": visited,
+		"book": book, "book_level": book_level,
 	}
 
 
@@ -54,4 +58,6 @@ static func from_dict(d: Dictionary) -> SimPoi:
 	poi.survivors = int(d["survivors"])
 	poi.discovered = d["discovered"]
 	poi.visited = d["visited"]
+	poi.book = d["book"]
+	poi.book_level = int(d["book_level"])
 	return poi

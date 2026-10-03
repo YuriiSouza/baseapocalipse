@@ -4,20 +4,16 @@
 
 [resource]
 script = ExtResource("1_def")
-id = "wall"
-display_name = "Muro"
-size = Vector2i(1, 1)
+id = "workshop"
+display_name = "Oficina"
+size = Vector2i(2, 2)
 cost = {
-"wood": 10,
-"scrap": 10
+"wood": 50,
+"scrap": 20
 }
-build_ticks = 200
-max_hp = 400
-drag_place = true
-requires = {
-"building": 4,
-"mechanics": 2
-}
+build_ticks = 400
+max_hp = 200
+is_workshop = true
 buildable = true
-color = Color(0.55, 0.55, 0.58, 1)
-height_px = 26.0
+color = Color(0.5, 0.52, 0.56, 1)
+height_px = 22.0

@@ -39,30 +39,37 @@ Não há vitória: o jogo termina quando a comunidade morre.
 
 Cada etapa termina com algo jogável e com testes da simulação em `tests/`.
 
-Estado: etapas 0, 1, 2, 3 e 4 implementadas. Próxima: etapa 5.
+Estado: etapas 0, 1, 2, 3, 4 e 5 implementadas. Próxima: etapa 6.
 
 Pendências conhecidas das etapas feitas:
 - A conferência visual é parcial: névoa, locais no mapa, painel de sobreviventes e textos do
   HUD foram vistos em capturas de tela; cliques e arrasto do mouse nunca foram exercitados
   (os testes rodam sem janela).
-- Munição e remédios só vêm do saque, que é finito: não há fonte renovável. No teste de
-  crescimento a comunidade chega a 20 pessoas com a munição zerada.
+- Munição e remédios vêm do saque, que é finito, ou da oficina, que exige mecânica 3
+  (munição) ou medicina 3 (remédios). Sem esse conhecimento não há fonte renovável: no teste
+  de crescimento a comunidade chega a 20 pessoas com a munição zerada.
 - A névoa só registra o que já foi explorado: zumbis e animais aparecem em qualquer área
   explorada, mesmo sem ninguém por perto.
 - Uma expedição faz uma viagem por ordem e cada pessoa traz um único tipo de recurso.
 - Recusar sobreviventes não tem custo; a consequência entra com a moral (etapa 6).
 - Crianças que chegam com um grupo não têm vínculo de parentesco com os adultos dele.
 - Fumaça não existe como fonte de atração; só barulho de trabalho, luz das casas à noite e tiros.
-- Cerca, paliçada e muro estão todos liberados desde o início; os degraus por conhecimento
-  entram na etapa 5.
+- O ensino é abstrato: basta quem sabe estar vivo, não precisa estar presente. Estuda-se ao
+  lado de uma casa; não existe escola.
+- Um livro interrompido (sono, ataque) recomeça do zero.
+- Não há habilidade própria para lenha nem sucata: cortar madeira treina construção e
+  recolher sucata treina mecânica.
+- As taxas de prática e estudo não foram balanceadas; só há teste de que funcionam.
+- Com os requisitos nos botões, o painel inferior do HUD cobre boa parte da tela. O texto
+  da oficina selecionada não foi visto em captura de tela.
 - Zumbis não calculam rota: contornam obstáculos por tentativa e podem ficar presos atrás de
   florestas e lagos grandes.
 - `src/sim/game_state.gd` passou de 1800 linhas e deve ser dividido (pessoas, zumbis, trabalho).
-  As regras da etapa 4 já ficam à parte, em `src/sim/exploration.gd`, como funções estáticas
-  sobre o estado; o mesmo formato serve para a divisão.
+  As regras das etapas 4 e 5 já ficam à parte, em `src/sim/exploration.gd` e
+  `src/sim/knowledge.gd`, como funções estáticas sobre o estado; o mesmo formato serve para
+  a divisão.
 - Lenha ainda não é consumida; a madeira só tem meta de estoque. O consumo entra com as
   estações (etapa 6), quando houver consequência para a falta.
-- Habilidades existem como dado, mas ainda não afetam o trabalho (etapa 5).
 - As funções padrão de uma criança não mudam sozinhas quando ela vira adulta (etapa 6).
 
 Testes, a partir da pasta do projeto:

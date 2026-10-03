@@ -6,7 +6,7 @@ extends RefCounted
 enum State {
 	IDLE, MOVING, TO_RESOURCE, GATHERING, TO_DROPOFF, TO_BUILD, BUILDING,
 	TO_BED, SLEEPING, TO_HUNT, HUNTING, TO_SHELTER, SHELTERED, DEFENDING,
-	TO_POI, LOOTING,
+	TO_POI, LOOTING, TO_STUDY, STUDYING, TO_CRAFT, CRAFTING,
 }
 
 ## Fields copied as they are by to_dict / from_dict.
@@ -16,6 +16,7 @@ const SAVED: Array[String] = [
 	"state", "ordered", "pushed", "work", "last_work", "idle_until",
 	"bed_building", "inside", "target_building", "hunt_target",
 	"shelter_building", "fight_target", "post", "cooldown", "expedition",
+	"study_skill", "writing", "recipe",
 	"gather_kind", "carry_kind", "carry_amount", "work_ticks",
 ]
 
@@ -67,6 +68,12 @@ var cooldown := 0
 ## Point of interest the person was sent to, or -1. Stays set for the whole trip, through
 ## fights and nights spent on the way, until the person is back at a drop-off.
 var expedition := -1
+## Skill being studied or written down.
+var study_skill := ""
+## Writing a book rather than learning.
+var writing := false
+## Recipe being made at a workshop.
+var recipe := ""
 var dest := Vector2i(-1, -1)
 var target_cell := Vector2i(-1, -1)
 var target_building := -1

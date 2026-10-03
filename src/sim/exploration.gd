@@ -16,6 +16,8 @@ const KIND_CYCLE: Array[String] = [
 static func generate_pois(s: GameState, world_seed: int, home: Vector2i, start: Vector2i) -> void:
 	var rng := RandomNumberGenerator.new()
 	rng.seed = world_seed + 2
+	var books := RandomNumberGenerator.new()
+	books.seed = world_seed + 3
 	@warning_ignore("integer_division")
 	var wanted := s.width * s.height / Defs.CELLS_PER_POI
 	var tries := 0
@@ -44,6 +46,9 @@ static func generate_pois(s: GameState, world_seed: int, home: Vector2i, start: 
 			poi.lurkers = int(info["lurkers"]) + int(dist / Defs.POI_CELLS_PER_LURKER)
 			if rng.randf() < Defs.POI_SURVIVOR_CHANCE:
 				poi.survivors = rng.randi_range(1, 2)
+			if books.randf() < Defs.POI_BOOK_CHANCE:
+				poi.book = Defs.SKILLS[books.randi() % Defs.SKILLS.size()]
+				poi.book_level = mini(6, 3 + int(dist / 40.0))
 		s._register_poi(poi)
 
 
@@ -127,6 +132,7 @@ static func tick_looting(s: GameState, p: SimPerson) -> void:
 		p.work_ticks = 0
 		p.carry_amount += 1
 		poi.loot[p.carry_kind] = left - 1
+		Knowledge.practice(p, "foraging", Defs.PRACTICE_PER_TICK * Defs.LOOT_TICKS_PER_UNIT)
 
 
 ## Back at a drop-off: the trip is over.
@@ -167,6 +173,9 @@ static func _arrive(s: GameState, p: SimPerson, poi: SimPoi) -> void:
 			make_offer(s, poi.survivors, poi.id, Defs.FOUND_OFFER_TICKS)
 			poi.survivors = 0
 			s.events.append("Sobreviventes encontrados: %s" % poi.display_name())
+		if poi.book != "":
+			Knowledge.add_book(s, poi.book, poi.book_level)
+			poi.book = ""
 	# One kind of thing per trip, the most valuable first.
 	for kind in Defs.LOOT_ORDER:
 		if int(poi.loot.get(kind, 0)) > 0:

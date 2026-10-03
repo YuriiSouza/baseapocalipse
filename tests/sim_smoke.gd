@@ -26,6 +26,9 @@ func _init() -> void:
 	_test_expeditions()
 	_test_survivors()
 	_test_growth()
+	_test_skills()
+	_test_knowledge()
+	_test_teaching()
 	_test_save_load()
 	print("FAILED: %d" % _failures if _failures > 0 else "ALL OK")
 	quit(1 if _failures > 0 else 0)
@@ -174,7 +177,7 @@ func _test_death() -> void:
 	_run(s, Defs.DAY_TICKS)
 	_check(s.is_over(), "without water everyone is dead by day 3")
 	_check(s.memorial.size() == 4 and s.memorial[0]["cause"] == "sede", "the memorial records 4 deaths by thirst")
-	_check(s.events.size() == 4, "each death raises an event")
+	_check(s.events.filter(func(e: String) -> bool: return e.contains("morreu")).size() == 4, "each death raises an event")
 	_check((s.buildings.values()[0] as SimBuilding).occupants == 0, "the dead free their beds")
 
 	var s2 := _manual(_new_game())
@@ -236,7 +239,7 @@ func _test_auto_work() -> void:
 	_check(stopped, "forbidden work is dropped and not picked again")
 	s.set_job(everyone, "water", true)
 
-	# Once every target is met, nobody works.
+	# Once every target is met, nobody works: at most they sit down to study.
 	for kind: String in ["food", "water", "wood", "scrap"]:
 		s.stockpile[kind] = 500
 	for p: SimPerson in s.people.values():
@@ -244,9 +247,9 @@ func _test_auto_work() -> void:
 	_run(s, 400)
 	var resting := 0
 	for p: SimPerson in s.people.values():
-		if p.state == State.IDLE and p.work == "":
+		if (p.state == State.IDLE and p.work == "") or p.work == "study":
 			resting += 1
-	_check(resting == 4, "with every target met, everyone rests (%d of 4)" % resting)
+	_check(resting == 4, "with every target met, everyone rests or studies (%d of 4)" % resting)
 
 	# A direct order overrides automatic work until the person sleeps.
 	s.stockpile["water"] = 0
@@ -280,7 +283,11 @@ func _test_production() -> void:
 	s.animals.clear()
 	s.stockpile["food"] = 30
 	_run(s, garden.ripe_tick - s.tick + 5)
-	_check(garden.stock == garden.get_def().crop_yield, "the crop ripens after %d days" % (Defs.GROW_TICKS / Defs.DAY_TICKS))
+	# The mother knows farming well enough for crop rotation, which gives half as much again.
+	_check(garden.stock == garden.get_def().crop_yield * 3 / 2, "the crop ripens after %d days (%d of food)" % [
+		Defs.GROW_TICKS / Defs.DAY_TICKS, garden.stock])
+	# Back to the plain yield: more than that and the food target is met before the plot is empty.
+	garden.stock = garden.get_def().crop_yield
 	var food_before: int = s.stockpile["food"]
 	_run(s, 700)
 	_check(garden.stock == 0 and s.stockpile["food"] > food_before, "the harvest is brought in (%d -> %d)" % [
@@ -918,6 +925,189 @@ func _expedition(s: GameState, members: Array[SimPerson], limit: int) -> bool:
 	return false
 
 
+func _test_skills() -> void:
+	print("-- skills grow with practice")
+	var s := _manual(_new_game())
+	var home := _home(s)
+	var adults := _by_age(s, false)
+	s.stockpile["wood"] = 500
+	s.stockpile["scrap"] = 100
+	s.order_gather(_ids([adults[0]]), home + Vector2i(-4, 0))  # tree
+	s.order_build(_ids([adults[1]]), s.place_building("storage", home + Vector2i(3, 6)))
+	_run(s, 300)
+	_check(adults[0].skills["building"] > 0.0 and adults[0].skills["foraging"] == 0.0, "cutting wood trains building (%.3f)" % adults[0].skills["building"])
+	_check(adults[1].skills["building"] > 0.0, "so does putting up a building (%.3f)" % adults[1].skills["building"])
+
+	var novice := SimPerson.new()
+	var master := SimPerson.new()
+	master.skills["combat"] = 5.0
+	Knowledge.practice(novice, "combat", 0.1)
+	Knowledge.practice(master, "combat", 0.1)
+	_check(novice.skills["combat"] > (master.skills["combat"] - 5.0) * 3.0, "the higher the level, the slower it grows")
+	master.skills["combat"] = 9.99
+	Knowledge.practice(master, "combat", 5.0)
+	_check(master.skills["combat"] == Defs.MAX_SKILL, "skills stop at %d" % Defs.MAX_SKILL)
+
+	var slow := _ticks_to_fill(0.0)
+	var fast := _ticks_to_fill(5.0)
+	_check(fast < slow, "a skilled person works faster (%d ticks against %d)" % [fast, slow])
+
+	# Shooting and treating wounds are practice too.
+	s = _new_game()
+	adults = _by_age(s, false)
+	var combat: float = adults[0].skills["combat"] + adults[1].skills["combat"]
+	var medicine: float = adults[0].skills["medicine"]
+	s.stockpile["ammo"] = 0
+	s.spawn_zombie(_home(s) + Vector2i(2, 6))
+	_run(s, 400)
+	_check(adults[0].skills["combat"] + adults[1].skills["combat"] > combat, "fighting trains combat")
+	_check(s.stockpile["medicine"] < 5 and adults[0].skills["medicine"] > medicine, "treating wounds trains whoever knows most medicine")
+
+
+## Ticks an adult with this much foraging takes to fill up with water at the pond.
+func _ticks_to_fill(foraging: float) -> int:
+	var s := _manual(_new_game())
+	var p := _by_age(s, false)[0]
+	p.skills["foraging"] = foraging
+	s.order_gather(_ids([p]), _home(s) + Vector2i(0, -6))
+	for i in 400:
+		s.step()
+		if p.state == State.TO_DROPOFF:
+			return i
+	return 400
+
+
+## The stage 5 criterion: what the community can do follows from what its people know,
+## and losing the only one who knew something blocks what was possible before.
+func _test_knowledge() -> void:
+	print("-- knowledge")
+	var s := _locked(_manual(_new_game()))
+	var home := _home(s)
+	var adults := _by_age(s, false)
+	# The test family: the father knows medicine 3 and combat 3, the mother hunting 3 and farming 4.
+	_check(s.knowledge("farming") == 4 and s.knowledge("medicine") == 3 and s.knowledge("building") == 0,
+		"the community knows what its best member knows")
+	_check(s.can_build("house") and s.can_build("fence") and s.can_build("workshop"), "the basics need no knowledge")
+	_check(not s.can_build("palisade") and not s.can_build("trap") and not s.can_build("wall"), "fortifications beyond a fence do")
+	_check(s.place_building("palisade", home + Vector2i(0, 8)) == -1, "what is not known cannot be built")
+
+	var builder := adults[0]
+	builder.skills["building"] = 3.4
+	s.step()
+	_check(s.knowledge("building") == 3 and s.can_build("palisade") and s.can_build("tower") and not s.can_build("wall"),
+		"a builder of level 3 unlocks palisade and tower, not the wall")
+	var first := s.place_building("palisade", home + Vector2i(0, 8))
+	_check(first >= 0, "and now it can be built")
+	s.events.clear()
+	s._kill(builder, "zumbis")
+	_check(s.knowledge("building") == 0 and not s.can_build("palisade") and s.place_building("palisade", home + Vector2i(1, 8)) == -1,
+		"with the only builder dead, it cannot any more")
+	_check(s.events.any(func(e: String) -> bool: return e.contains("se foi conhecimento") and e.contains("construção 3 → 0")),
+		"the loss is announced")
+	_check(s.buildings.has(first), "what was already built stays")
+
+	# Improvements follow knowledge too.
+	_check(Knowledge.bonus(s, "crop_yield") == 1.5 and Knowledge.bonus(s, "carcass") == 1.5, "farming 4 and hunting 3 bring improvements")
+	s._kill(adults[1], "zumbis")
+	_check(Knowledge.bonus(s, "crop_yield") == 1.0, "which are lost with the person")
+
+	# Recipes at the workshop: ammunition out of scrap needs mechanics 3.
+	s = _locked(_manual(_new_game()))
+	home = _home(s)
+	adults = _by_age(s, false)
+	for kind: String in ["food", "water", "wood", "scrap"]:
+		s.stockpile[kind] = 500
+	s.stockpile["ammo"] = 0
+	var shop := _built(s, "workshop", home + Vector2i(3, 5))
+	s.set_job(_ids(adults), "craft", true)
+	_run(s, 400)
+	_check(shop != null and s.stockpile["ammo"] == 0 and s.stockpile["medicine"] > 5,
+		"without mechanics no ammunition is made, but the father's medicine makes remedies (%d)" % s.stockpile["medicine"])
+	adults[1].skills["mechanics"] = 3.0
+	_run(s, 600)
+	_check(s.stockpile["ammo"] > 0 and s.stockpile["scrap"] < 500, "a mechanic makes ammunition out of scrap (%d)" % s.stockpile["ammo"])
+	_check(adults[1].skills["mechanics"] > 3.0, "and gets better at it")
+	s._kill(adults[1], "zumbis")
+	s.stockpile["ammo"] = 0
+	_run(s, 600)
+	_check(s.stockpile["ammo"] == 0, "with the mechanic dead, no more ammunition")
+	s.stockpile["medicine"] = 10
+	_run(s, 50)
+	var food: int = s.stockpile["food"]
+	_run(s, 400)
+	_check(s.stockpile["medicine"] == 10 and adults[0].state != State.CRAFTING, "nothing is made beyond the target stock")
+	_check(food - s.stockpile["food"] < 10, "and no food goes into remedies meanwhile")
+
+
+func _test_teaching() -> void:
+	print("-- teaching and books")
+	var s := _locked(_manual(_new_game()))
+	var adults := _by_age(s, false)
+	var kids := _by_age(s, true)
+	var master := adults[0]
+	var pupil := kids[0]
+	for kind: String in ["food", "water"]:
+		s.stockpile[kind] = 5000
+	for skill in Defs.SKILLS:
+		for p: SimPerson in s.people.values():
+			p.skills[skill] = 0.0
+	master.skills["building"] = 4.0
+	_check(Knowledge.study_plan(s, pupil) == ["building", false], "a pupil can learn what someone else knows")
+	_check(Knowledge.study_plan(s, master) == ["building", true], "the one who knows it best can write it down")
+	_check(Knowledge.study_plan(s, kids[1]) == ["building", false] and Knowledge.study_plan(s, adults[1]).size() == 2, "and so can everyone else")
+
+	s.set_job(_ids([pupil]), "study", true)
+	_run(s, 60)
+	_check(pupil.work == "study" and pupil.state in [State.TO_STUDY, State.STUDYING], "with nothing else to do, the pupil studies")
+	_run(s, Defs.DAY_TICKS * 3)
+	_check(pupil.skills["building"] > 1.0 and pupil.skills["building"] <= 4.0, "and learns from the master (%.2f)" % pupil.skills["building"])
+	var learned: float = pupil.skills["building"]
+
+	# No book: when the master dies the pupil is stuck at what was learned so far.
+	var lone := GameState.from_dict(bytes_to_var(var_to_bytes(s.to_dict())))
+	lone._kill(lone.people[master.id], "zumbis")
+	var lone_pupil: SimPerson = lone.people[pupil.id]
+	_run(lone, Defs.DAY_TICKS * 4)
+	_check(is_equal_approx(lone_pupil.skills["building"], learned), "without the master or a book there is nobody to learn from")
+
+	# The master writes a book; after the master dies, the book still teaches.
+	s.set_job(_ids([master]), "study", true)
+	for i in Defs.DAY_TICKS * 2:
+		s.step()
+		if s.library.has("building"):
+			break
+	_check(s.library.get("building", 0) == 4, "the master writes a book of level 4")
+	_check(s.events.any(func(e: String) -> bool: return e.contains("escreveu um livro de construção")), "which is announced")
+	_check(Knowledge.study_plan(s, master).is_empty(), "there is nothing more for the master to write")
+	s._kill(master, "zumbis")
+	pupil.skills["building"] = 1.5
+	s.step()
+	_check(not s.can_build("palisade"), "with the master dead the palisade is lost")
+	for i in Defs.DAY_TICKS * 6:
+		s.step()
+		if s.can_build("palisade"):
+			break
+	_check(s.can_build("palisade") and pupil.skills["building"] >= 2.0, "the pupil gets it back from the book (%.2f)" % pupil.skills["building"])
+	_run(s, Defs.DAY_TICKS * 30)
+	_check(pupil.skills["building"] > 3.0 and pupil.skills["building"] <= 4.0, "but no further than the book goes (%.2f)" % pupil.skills["building"])
+
+	# Books are also found on expeditions.
+	s = _manual(_new_game())
+	var place := _known_place(s)
+	place.lurkers = 0
+	place.survivors = 0
+	place.book = "mechanics"
+	place.book_level = 3
+	s.order_expedition(_ids([_by_age(s, false)[0]]), place.id)
+	_expedition(s, _by_age(s, false), 1500)
+	_check(s.library.get("mechanics", 0) == 3 and place.book == "", "a book found at a place joins the library")
+	var with_books := 0
+	for poi: SimPoi in s.pois.values():
+		if poi.book != "":
+			with_books += 1
+	_check(with_books >= 3, "some places on the map have books (%d)" % with_books)
+
+
 func _test_save_load() -> void:
 	print("-- save / load")
 	var s := _new_game()
@@ -934,6 +1124,8 @@ func _test_save_load() -> void:
 	s.spawn_zombie(home + Vector2i(-30, 4))
 	# An expedition on its way, a group waiting for an answer and survivors arriving.
 	s.arrivals_enabled = true
+	s.library["farming"] = 5
+	_built(s, "workshop", home + Vector2i(4, 6))
 	_known_place(s).survivors = 2
 	s.order_expedition(_ids([_by_age(s, false)[0]]), _known_place(s).id)
 	# No water and nobody allowed to fetch it: people die a while after the save,
@@ -953,12 +1145,20 @@ func _test_save_load() -> void:
 		"loaded game stays in sync for 2 more days")
 
 
-## A new game with no zombies on the map, and neither zombies nor survivors arriving.
+## A new game with no zombies on the map, neither zombies nor survivors arriving, and
+## everything allowed to be built whatever the family knows.
 func _new_game() -> GameState:
 	var s := GameState.new_game(SEED)
+	s.locks_enabled = false
 	s.zombies_enabled = false
 	s.arrivals_enabled = false
 	s.clear_zombies()
+	return s
+
+
+## Switches the knowledge locks back on, for tests about what the community may build.
+func _locked(s: GameState) -> GameState:
+	s.locks_enabled = true
 	return s
 
 

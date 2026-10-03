@@ -28,6 +28,16 @@ const BUILDINGS := {
 	"gate": preload("res://data/buildings/gate.tres"),
 	"tower": preload("res://data/buildings/tower.tres"),
 	"trap": preload("res://data/buildings/trap.tres"),
+	"workshop": preload("res://data/buildings/workshop.tres"),
+}
+const RECIPES := {
+	"ammo": preload("res://data/recipes/ammo.tres"),
+	"medicine": preload("res://data/recipes/medicine.tres"),
+}
+const IMPROVEMENTS := {
+	"crop_rotation": preload("res://data/improvements/crop_rotation.tres"),
+	"first_aid": preload("res://data/improvements/first_aid.tres"),
+	"smoking": preload("res://data/improvements/smoking.tres"),
 }
 
 ## Places to explore. Loot is the amount at the reference distance; it grows further out.
@@ -90,15 +100,17 @@ const HEALTH_REGEN := 0.1
 ## Kinds of work a person can be allowed to do, in the order the HUD lists them.
 ## "guard" is not picked like the others: it decides whether the person fights or hides
 ## when zombies show up.
-const WORK_TYPES: Array[String] = ["build", "farm", "water", "forage", "hunt", "wood", "scrap", "guard"]
+const WORK_TYPES: Array[String] = [
+	"build", "farm", "water", "forage", "hunt", "wood", "scrap", "craft", "study", "guard"]
 const WORK_NAMES := {
 	"build": "Construir", "farm": "Horta", "water": "Água", "forage": "Coletar comida",
-	"hunt": "Caçar", "wood": "Lenha", "scrap": "Sucata", "guard": "Defender",
+	"hunt": "Caçar", "wood": "Lenha", "scrap": "Sucata",
+	"craft": "Oficina", "study": "Estudar", "guard": "Defender",
 }
 ## Work that is plain gathering, and the resource it brings in.
 const WORK_YIELD := {"water": "water", "forage": "food", "wood": "wood", "scrap": "scrap"}
 ## Children are not given these by default.
-const ADULT_ONLY_WORK: Array[String] = ["build", "hunt", "guard"]
+const ADULT_ONLY_WORK: Array[String] = ["build", "hunt", "craft", "guard"]
 ## Stock the community tries to keep. Work on a resource stops once its target is met.
 const FOOD_TARGET_DAYS := 4
 const WATER_TARGET_DAYS := 2
@@ -122,6 +134,24 @@ const CELLS_PER_ANIMAL := 400  # wildlife density the map is kept at
 const ANIMAL_RESPAWN_PER_DAY := 6
 const ANIMAL_THINK_TICKS := 20
 const ANIMAL_SPEED := 0.03
+
+# --- Knowledge ---
+const MAX_SKILL := 10.0
+## Skill gained per tick of work at level 0; divided by (1 + level) above that.
+## A day of work is roughly 800 ticks.
+const PRACTICE_PER_TICK := 0.0004
+const PRACTICE_PER_SHOT := 0.01  # combat, per shot or blow
+const PRACTICE_PER_KILL := 0.05  # hunting, per animal
+const PRACTICE_PER_TREATMENT := 0.1  # medicine, for whoever knows it best
+## Each level makes the work this much faster.
+const SKILL_SPEED := 0.1
+## Skill trained by gathering each resource. Crop plots train farming and carcasses hunting.
+const GATHER_SKILL := {"food": "foraging", "water": "foraging", "wood": "building", "scrap": "mechanics"}
+const STUDY_PER_TICK := 0.0012  # learning from someone or from a book beats practice
+const STUDY_TICKS := 300  # one sitting
+const WRITE_TICKS := 600
+const BOOK_MIN_LEVEL := 3  # below this there is nothing worth writing down
+const POI_BOOK_CHANCE := 0.35
 
 # --- Simulation budget ---
 const MAP_SIZE := 256
@@ -173,7 +203,7 @@ const CAMP_SKIP_STEPS := 40
 
 # --- Survivors ---
 const ARRIVAL_FIRST_DAY := 3
-const ARRIVAL_CHANCE := 25  # percent, each dawn
+const ARRIVAL_CHANCE := 15  # percent, each dawn
 const ARRIVAL_OFFER_TICKS := DAY_TICKS  # how long a group at the door waits for an answer
 const FOUND_OFFER_TICKS := 3 * DAY_TICKS  # people found at a place wait longer
 
