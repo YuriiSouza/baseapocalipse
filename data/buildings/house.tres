@@ -1,0 +1,19 @@
+[gd_resource type="Resource" script_class="BuildingDef" load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://src/defs/building_def.gd" id="1_def"]
+
+[resource]
+script = ExtResource("1_def")
+id = "house"
+display_name = "Casa"
+size = Vector2i(1, 1)
+cost = {
+"wood": 30
+}
+build_ticks = 150
+pop_cap = 5
+is_dropoff = false
+trains_villagers = false
+buildable = true
+color = Color(0.72, 0.5, 0.36, 1)
+height_px = 20.0

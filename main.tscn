@@ -1,0 +1,26 @@
+[gd_scene load_steps=7 format=3]
+
+[ext_resource type="Script" path="res://src/main.gd" id="1_main"]
+[ext_resource type="Script" path="res://src/view/terrain_view.gd" id="2_terrain"]
+[ext_resource type="Script" path="res://src/view/entity_view.gd" id="3_entity"]
+[ext_resource type="Script" path="res://src/view/player_controller.gd" id="4_ctrl"]
+[ext_resource type="Script" path="res://src/view/camera_rig.gd" id="5_cam"]
+[ext_resource type="Script" path="res://src/view/hud.gd" id="6_hud"]
+
+[node name="Main" type="Node2D"]
+script = ExtResource("1_main")
+
+[node name="TerrainView" type="Node2D" parent="."]
+script = ExtResource("2_terrain")
+
+[node name="EntityView" type="Node2D" parent="."]
+script = ExtResource("3_entity")
+
+[node name="PlayerController" type="Node2D" parent="."]
+script = ExtResource("4_ctrl")
+
+[node name="Camera" type="Camera2D" parent="."]
+script = ExtResource("5_cam")
+
+[node name="Hud" type="CanvasLayer" parent="."]
+script = ExtResource("6_hud")
