@@ -22,6 +22,10 @@ func _init() -> void:
 	_test_fortifications()
 	_test_attraction()
 	_test_siege()
+	_test_exploration()
+	_test_expeditions()
+	_test_survivors()
+	_test_growth()
 	_test_save_load()
 	print("FAILED: %d" % _failures if _failures > 0 else "ALL OK")
 	quit(1 if _failures > 0 else 0)
@@ -622,6 +626,298 @@ func _siege_scenario(fortified: bool) -> GameState:
 	return s
 
 
+func _test_exploration() -> void:
+	print("-- fog and points of interest")
+	var s := _manual(_new_game())
+	var home := _home(s)
+	_check(s.is_explored(home) and s.is_explored(home + Vector2i(12, 0)) and not s.is_explored(home + Vector2i(40, 0)),
+		"only the surroundings of the home start explored")
+	var known: Array[SimPoi] = []
+	var kinds := {}
+	var formula_ok := true
+	var reachable := true
+	var closest := INF
+	for poi: SimPoi in s.pois.values():
+		kinds[poi.kind] = true
+		var dist := Vector2(poi.cell - home).length()
+		closest = minf(closest, dist)
+		if poi.discovered:
+			known.append(poi)
+		var base: int = Defs.POI_KINDS[poi.kind]["lurkers"]
+		if poi.kind != "camp" and poi.lurkers != base + int(dist / Defs.POI_CELLS_PER_LURKER):
+			formula_ok = false
+		if s._ring(poi.cell, SimPoi.SIZE).is_empty() or not s._maybe_connected(home + Vector2i(1, 1), s._ring(poi.cell, SimPoi.SIZE)[0]):
+			reachable = false
+	_check(s.pois.size() >= 20 and kinds.size() == Defs.POI_KINDS.size(), "the map has %d places of %d kinds" % [s.pois.size(), kinds.size()])
+	_check(closest >= Defs.POI_MIN_DISTANCE, "none closer than %d cells to the home (%.0f)" % [Defs.POI_MIN_DISTANCE, closest])
+	_check(reachable, "every place can be walked to from the home")
+	_check(formula_ok, "the further a place, the more zombies inside")
+	_check(known.size() == 1 and absf(Vector2(known[0].cell - home).length() - Defs.FIRST_POI_DISTANCE) < 2.0,
+		"the family starts knowing one place, a short trip away")
+	_check(not s.can_place("house", known[0].cell) and s.poi_at(known[0].cell + Vector2i.ONE) == known[0],
+		"a place takes up its cells")
+
+	# Walking into the fog lifts it and finds what is there.
+	var hidden: SimPoi = null
+	for poi: SimPoi in s.pois.values():
+		if not poi.discovered and (hidden == null or (poi.cell - home).length() < (hidden.cell - home).length()):
+			hidden = poi
+	var scout := _by_age(s, false)[0]
+	_check(not s.is_explored(hidden.cell), "the nearest unknown place is in the fog")
+	s.order_expedition(_ids([scout]), hidden.id)
+	_check(scout.expedition < 0 and scout.state == State.IDLE, "an expedition cannot be sent to a place nobody has seen")
+	s.order_move(_ids([scout]), s._ring(hidden.cell, SimPoi.SIZE)[0])
+	for i in 600:
+		s.step()
+		if hidden.discovered:
+			break
+	_check(hidden.discovered and s.is_explored(hidden.cell), "a scout walking there finds it")
+	_check(s.events.has("Encontrado: %s" % hidden.display_name()), "and the find is announced")
+	_check(not s.revealed.is_empty(), "newly explored blocks are reported to the view")
+
+
+func _test_expeditions() -> void:
+	print("-- expeditions")
+	var s := _manual(_new_game())
+	var adults := _by_age(s, false)
+	var place := _known_place(s)
+	place.lurkers = 0
+	place.survivors = 0
+	place.loot = {"scrap": 100}
+	s.order_expedition(_ids(adults), place.id)
+	_check(adults[0].state == State.TO_POI and adults[0].expedition == place.id and adults[0].ordered, "the group sets off")
+	_check(_expedition(s, adults, 1500), "and comes back")
+	_check(place.visited and place.loot_left() == 100 - 2 * Defs.LOOT_CAPACITY and s.stockpile["scrap"] == 2 * Defs.LOOT_CAPACITY,
+		"each brings a full bag home (%d left there, %d in stock)" % [place.loot_left(), s.stockpile["scrap"]])
+	_check(adults[0].state == State.IDLE and not adults[0].ordered, "the order ends when they are back")
+
+	# The loot is finite.
+	place.loot = {"scrap": 5}
+	s.events.clear()
+	s.order_expedition(_ids(adults), place.id)
+	_expedition(s, adults, 1500)
+	_check(place.loot_left() == 0 and s.stockpile["scrap"] == 2 * Defs.LOOT_CAPACITY + 5, "a place can be stripped bare")
+	adults[1].energy = 1.0
+	s.order_expedition(_ids([adults[1]]), place.id)
+	_expedition(s, adults, 1500)
+	_check(s.events.any(func(e: String) -> bool: return e.ends_with("de mãos vazias")), "whoever goes there again comes back empty-handed")
+
+	# Medicine and ammunition are taken before food and scrap.
+	place.loot = {"scrap": 50, "food": 50, "medicine": 3}
+	adults[0].energy = 1.0
+	s.order_expedition(_ids([adults[0]]), place.id)
+	_expedition(s, adults, 1500)
+	_check(place.loot["medicine"] == 0 and place.loot["food"] == 50 and s.stockpile["medicine"] == 8,
+		"medicine is taken first")
+
+	# Too tired half way: camp on the spot, then carry on.
+	s.stockpile["food"] = 500
+	s.stockpile["water"] = 500
+	adults[0].energy = Defs.TIRED + 0.04
+	place.loot = {"scrap": 50}
+	s.order_expedition(_ids([adults[0]]), place.id)
+	_run(s, 120)
+	_check(adults[0].state == State.SLEEPING and adults[0].inside < 0 and adults[0].expedition == place.id,
+		"a tired expedition camps on the way")
+	adults[0].energy = 1.0
+	s.step()
+	_check(adults[0].state == State.TO_POI, "and goes on after sleeping")
+	_check(_expedition(s, adults, 1500) and place.loot_left() == 50 - Defs.LOOT_CAPACITY, "the trip is completed")
+
+	# Zombies inside come out when the group gets close; armed guards deal with them.
+	s = _new_game()
+	adults = _by_age(s, false)
+	place = _known_place(s)
+	place.lurkers = 2
+	place.survivors = 0
+	for kind: String in ["food", "water", "wood", "scrap"]:
+		s.stockpile[kind] = 500
+	s.order_expedition(_ids(adults), place.id)
+	var came_out := 0
+	for i in 400:
+		s.step()
+		came_out = maxi(came_out, s.zombies.size())
+	_check(came_out == 2 and place.lurkers == 0 and s.events.has("Zumbis saem de %s!" % place.display_name()),
+		"the zombies inside come out (%d)" % came_out)
+	_check(_expedition(s, adults, 2500) and s.zombies.is_empty() and s.people.size() == 4,
+		"the guards shoot them and the trip goes on (%d zombies left)" % s.zombies.size())
+	_check(s.stockpile["ammo"] < 20 and place.visited, "at the cost of ammunition (%d left)" % s.stockpile["ammo"])
+
+
+func _test_survivors() -> void:
+	print("-- survivors")
+	var s := _manual(_new_game())
+	var home := _home(s)
+	var adults := _by_age(s, false)
+	var place := _known_place(s)
+	place.lurkers = 0
+	place.survivors = 2
+	s.stockpile["food"] = 500
+	s.stockpile["water"] = 500
+	s.order_expedition(_ids([adults[0]]), place.id)
+	_expedition(s, adults, 1500)
+	_check(s.offers.size() == 1 and s.offers[0]["poi"] == place.id and (s.offers[0]["people"] as Array).size() == 2,
+		"people hiding at a place ask to join when it is reached")
+	var offer_id: int = s.offers[0]["id"]
+	var first_name: String = s.offers[0]["people"][0]["first_name"]
+	_check(not s.accept_offer(offer_id) and s.people.size() == 4 and s.offers.size() == 1, "without free beds they cannot be taken in")
+	s.stockpile["wood"] = 200
+	s.stockpile["scrap"] = 50
+	_built(s, "house", home + Vector2i(-4, 3))
+	_check(s.total_beds() == 8 and s.accept_offer(offer_id), "with a second house they can")
+	_check(s.people.size() == 6 and s.offers.is_empty(), "the community grows to 6")
+	var newcomer: SimPerson = null
+	for p: SimPerson in s.people.values():
+		if p.first_name == first_name and p.pos.distance_to(place.center()) < 5.0:
+			newcomer = p
+	_check(newcomer != null and newcomer.jobs["guard"] and not newcomer.skills.is_empty(), "they start at the place where they were found")
+	_run(s, 400)
+	_check(newcomer.pos.distance_to(Vector2(home)) < 8.0, "and walk to the base on their own (%.0f cells away)" % newcomer.pos.distance_to(Vector2(home)))
+
+	# Refusing and letting an offer lapse.
+	Exploration.make_offer(s, 3, -1, 100)
+	s.refuse_offer(s.offers[0]["id"])
+	_check(s.offers.is_empty() and s.people.size() == 6, "a refused group goes away")
+	Exploration.make_offer(s, 1, -1, 100)
+	_run(s, 151)
+	_check(s.offers.is_empty() and s.events.has("Os sobreviventes foram embora"), "an unanswered group leaves after a while")
+
+	# People turning up at the base: none in the first days, then now and then.
+	s = _manual(_new_game())
+	s.arrivals_enabled = true
+	var groups := 0
+	var first_day := 0
+	var one_at_a_time := true
+	for d in range(1, 61):
+		s.tick = Defs.DAY_TICKS * d - 1
+		s.step()
+		if not s.offers.is_empty():
+			groups += 1
+			if first_day == 0:
+				first_day = s.day()
+			if s.offers.size() != 1 or s.offers[0]["poi"] != -1:
+				one_at_a_time = false
+			s.refuse_offer(s.offers[0]["id"])
+	_check(one_at_a_time, "one group at the door at a time")
+	_check(first_day >= Defs.ARRIVAL_FIRST_DAY and groups >= 6 and groups <= 25,
+		"survivors reach the base now and then (%d groups in 60 days, first on day %d)" % [groups, first_day])
+	Exploration.make_offer(s, 2, -1, 100)
+	s.stockpile["wood"] = 200
+	s.stockpile["scrap"] = 50
+	_check(_built(s, "house", _home(s) + Vector2i(-4, 3)) != null and s.accept_offer(s.offers[0]["id"]), "they are taken in")
+	var at_base := 0
+	for p: SimPerson in s.people.values():
+		if p.pos.distance_to(Vector2(_home(s))) < 6.0:
+			at_base += 1
+	_check(at_base == 6, "and appear at the base (%d there)" % at_base)
+
+
+## The stage 4 criterion: by exploring and taking people in, the family of 4 becomes a
+## community of about 20. Played by a simple script standing in for the player, in a
+## normal game with zombies.
+func _test_growth() -> void:
+	print("-- growth by exploration")
+	var s := GameState.new_game(SEED)
+	var home := _home(s)
+	var days := 0
+	var found := 0
+	var arrived := 0
+	while s.people.size() < 20 and not s.is_over() and days < 5 * Defs.DAYS_PER_YEAR:
+		for i in Defs.DAY_TICKS / 100:
+			_run(s, 100)
+			for offer: Dictionary in s.offers.duplicate():
+				var group: int = (offer["people"] as Array).size()
+				if s.accept_offer(offer["id"]):
+					if offer["poi"] >= 0:
+						found += group
+					else:
+						arrived += group
+			_player_builds(s, home)
+			_player_explores(s, home)
+		days += 1
+	_check(s.people.size() >= 20, "the family of 4 grows to %d in %d days (%d found, %d arrived, %d died)" % [
+		s.people.size(), days, found, arrived, s.memorial.size()])
+	_check(found >= 8, "most of them found by expeditions")
+	var visited := 0
+	var explored := 0
+	for poi: SimPoi in s.pois.values():
+		if poi.visited:
+			visited += 1
+	for block in s.explored:
+		explored += block
+	print("      places visited %d of %d, map explored %d%%, zombies %d, stock %s" % [
+		visited, s.pois.size(), 100 * explored / s.explored.size(), s.zombies.size(), s.stockpile])
+
+
+## Keeps a few beds free for newcomers, and water and food production in step with the
+## number of people.
+func _player_builds(s: GameState, home: Vector2i) -> void:
+	var counts := {}
+	for b: SimBuilding in s.buildings.values():
+		counts[b.def_id] = int(counts.get(b.def_id, 0)) + 1
+	var wanted := ""
+	if int(counts.get("well", 0)) == 0:
+		wanted = "well"
+	elif int(counts.get("house", 0)) * 4 < s.people.size() + 4:
+		wanted = "house"
+	elif int(counts.get("garden", 0)) * 3 < s.people.size():
+		wanted = "garden"
+	if wanted == "" or not s.can_afford(Defs.building(wanted).cost):
+		return
+	for r in range(3, 16, 3):
+		for y in range(-r, r + 1, 3):
+			for x in range(-r, r + 1, 3):
+				if maxi(absi(x), absi(y)) == r and s.place_building(wanted, home + Vector2i(x, y)) >= 0:
+					return
+
+
+## Each morning sends half of the rested adults to the nearest known place worth a trip.
+## With none known, one adult scouts towards the nearest undiscovered place, which stands
+## in for a player combing the fog.
+func _player_explores(s: GameState, home: Vector2i) -> void:
+	if s.hour() > 9.0:
+		return
+	var team: Array[int] = []
+	for p: SimPerson in s.people.values():
+		if p.expedition >= 0 or p.ordered:
+			return  # someone is still out
+		if not p.is_child(s.day()) and p.energy > 0.8 and not p.wounded:
+			team.append(p.id)
+	team.resize(mini(team.size(), maxi(2, team.size() / 2)))
+	var target: SimPoi = null
+	var unknown: SimPoi = null
+	for poi: SimPoi in s.pois.values():
+		var dist := (poi.cell - home).length()
+		if not poi.discovered:
+			if unknown == null or dist < (unknown.cell - home).length():
+				unknown = poi
+		elif (not poi.visited or poi.loot_left() > 0) and (target == null or dist < (target.cell - home).length()):
+			target = poi
+	if team.is_empty():
+		return
+	if target != null:
+		s.order_expedition(team, target.id)
+	elif unknown != null:
+		s.order_move([team[0]] as Array[int], s._ring(unknown.cell, SimPoi.SIZE)[0])
+
+
+## The place the family knows about from the start.
+func _known_place(s: GameState) -> SimPoi:
+	for poi: SimPoi in s.pois.values():
+		if poi.discovered:
+			return poi
+	return null
+
+
+## Runs until none of the people is on an expedition any more. False if it takes too long.
+func _expedition(s: GameState, members: Array[SimPerson], limit: int) -> bool:
+	for i in limit:
+		s.step()
+		if not members.any(func(p: SimPerson) -> bool: return p.expedition >= 0):
+			return true
+	return false
+
+
 func _test_save_load() -> void:
 	print("-- save / load")
 	var s := _new_game()
@@ -636,6 +932,10 @@ func _test_save_load() -> void:
 	s.spawn_zombie(home + Vector2i(0, 12))
 	s.spawn_zombie(home + Vector2i(2, 9))
 	s.spawn_zombie(home + Vector2i(-30, 4))
+	# An expedition on its way, a group waiting for an answer and survivors arriving.
+	s.arrivals_enabled = true
+	_known_place(s).survivors = 2
+	s.order_expedition(_ids([_by_age(s, false)[0]]), _known_place(s).id)
 	# No water and nobody allowed to fetch it: people die a while after the save,
 	# so the comparison below also covers deaths and the memorial.
 	s.stockpile["water"] = 0
@@ -653,10 +953,11 @@ func _test_save_load() -> void:
 		"loaded game stays in sync for 2 more days")
 
 
-## A new game with no zombies on the map and none arriving.
+## A new game with no zombies on the map, and neither zombies nor survivors arriving.
 func _new_game() -> GameState:
 	var s := GameState.new_game(SEED)
 	s.zombies_enabled = false
+	s.arrivals_enabled = false
 	s.clear_zombies()
 	return s
 

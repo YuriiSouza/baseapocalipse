@@ -30,15 +30,34 @@ const BUILDINGS := {
 	"trap": preload("res://data/buildings/trap.tres"),
 }
 
+## Places to explore. Loot is the amount at the reference distance; it grows further out.
+## "lurkers" are zombies inside regardless of distance.
+const POI_KINDS := {
+	"farmhouse": {"name": "Sítio abandonado", "loot": {"food": 40, "scrap": 15}, "lurkers": 0},
+	"store": {"name": "Mercadinho", "loot": {"food": 90, "medicine": 4}, "lurkers": 1},
+	"gas": {"name": "Posto de gasolina", "loot": {"scrap": 80, "ammo": 10}, "lurkers": 0},
+	"clinic": {"name": "Posto de saúde", "loot": {"medicine": 20}, "lurkers": 1},
+	"police": {"name": "Posto policial", "loot": {"ammo": 60, "medicine": 3}, "lurkers": 2},
+	"camp": {"name": "Acampamento", "loot": {"food": 10}, "lurkers": 0},
+}
+## What an expedition takes first when there is more than one kind of thing.
+const LOOT_ORDER: Array[String] = ["medicine", "ammo", "food", "scrap"]
+
 const SKILLS: Array[String] = ["foraging", "hunting", "building", "farming", "medicine", "mechanics", "combat"]
 const SKILL_NAMES := {
 	"foraging": "coleta", "hunting": "caça", "building": "construção", "farming": "agricultura",
 	"medicine": "medicina", "mechanics": "mecânica", "combat": "combate",
 }
 
-const MALE_NAMES: Array[String] = ["João", "Pedro", "Lucas", "Miguel", "Rafael", "Carlos", "André", "Mateus", "Tiago", "Bruno"]
-const FEMALE_NAMES: Array[String] = ["Ana", "Maria", "Júlia", "Clara", "Beatriz", "Helena", "Laura", "Sofia", "Lívia", "Marina"]
-const SURNAMES: Array[String] = ["Silva", "Souza", "Oliveira", "Santos", "Pereira", "Costa", "Almeida", "Ferreira"]
+const MALE_NAMES: Array[String] = [
+	"João", "Pedro", "Lucas", "Miguel", "Rafael", "Carlos", "André", "Mateus", "Tiago", "Bruno",
+	"Antônio", "Felipe", "Gustavo", "Henrique", "Marcos", "Paulo", "Ricardo", "Sérgio", "Vítor", "Diego"]
+const FEMALE_NAMES: Array[String] = [
+	"Ana", "Maria", "Júlia", "Clara", "Beatriz", "Helena", "Laura", "Sofia", "Lívia", "Marina",
+	"Alice", "Camila", "Fernanda", "Isabela", "Luíza", "Patrícia", "Renata", "Sandra", "Teresa", "Vera"]
+const SURNAMES: Array[String] = [
+	"Silva", "Souza", "Oliveira", "Santos", "Pereira", "Costa", "Almeida", "Ferreira",
+	"Rodrigues", "Gomes", "Martins", "Araújo", "Barbosa", "Ribeiro", "Carvalho", "Lima"]
 
 # --- Time ---
 const DAY_TICKS := 1800  # 3 minutes at 1x
@@ -132,6 +151,32 @@ const ZOMBIE_DAILY_BASE := 1.0
 const ZOMBIE_DAILY_GROWTH := 0.1
 const ZOMBIE_PER_PERSON := 0.1
 
+# --- Exploration ---
+const FOG_BLOCK := 4  # cells; the fog lifts a block at a time
+const SIGHT_RADIUS := 10.0  # cells a person explores around them
+const START_SIGHT := 16.0  # explored around the home at the start
+const CELLS_PER_POI := 2400  # density of points of interest
+const POI_MIN_DISTANCE := 22.0  # cells from the family home
+const POI_SPACING := 14.0
+const FIRST_POI_DISTANCE := 28.0  # the one place the family knows about from the start
+# Loot is multiplied by LOOT_BASE_FACTOR + distance / LOOT_DISTANCE.
+const LOOT_BASE_FACTOR := 0.6
+const LOOT_DISTANCE := 100.0
+## One more zombie inside for each of these cells of distance from home.
+const POI_CELLS_PER_LURKER := 25.0
+const POI_WAKE_RADIUS := 6.0  # someone this close brings the zombies out
+const POI_SURVIVOR_CHANCE := 0.25  # that a place other than a camp has people hiding
+const LOOT_CAPACITY := 20  # an expedition goes with bags
+const LOOT_TICKS_PER_UNIT := 4
+## A tired expedition this close to the end of its way back keeps going instead of camping.
+const CAMP_SKIP_STEPS := 40
+
+# --- Survivors ---
+const ARRIVAL_FIRST_DAY := 3
+const ARRIVAL_CHANCE := 25  # percent, each dawn
+const ARRIVAL_OFFER_TICKS := DAY_TICKS  # how long a group at the door waits for an answer
+const FOUND_OFFER_TICKS := 3 * DAY_TICKS  # people found at a place wait longer
+
 # --- Noise: what draws zombies that cannot see anyone ---
 const NOISE_BUCKET := 16  # cells
 const NOISE_PERSON := 1.0  # someone awake and busy, outdoors
@@ -171,5 +216,6 @@ static func building(id: String) -> BuildingDef:
 static func format_cost(cost: Dictionary) -> String:
 	var parts := PackedStringArray()
 	for kind: String in cost:
-		parts.append("%d %s" % [int(cost[kind]), String(RESOURCE_NAMES[kind]).to_lower()])
+		if int(cost[kind]) > 0:
+			parts.append("%d %s" % [int(cost[kind]), String(RESOURCE_NAMES[kind]).to_lower()])
 	return ", ".join(parts)

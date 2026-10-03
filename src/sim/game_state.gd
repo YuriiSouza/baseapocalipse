@@ -5,7 +5,7 @@ extends RefCounted
 ## through the order_* / place_building / set_job methods.
 
 const TICKS_PER_SECOND := 10
-const SAVE_VERSION := 5
+const SAVE_VERSION := 6
 const NO_CELL := Vector2i(-1, -1)
 ## Tick of the day at which night falls and new zombies reach the map edge.
 const DUSK_TICK := int((Defs.NIGHT_START - Defs.START_HOUR) / 24.0 * Defs.DAY_TICKS)
@@ -23,6 +23,14 @@ var people := {}  # id -> SimPerson
 var zombies := {}  # id -> SimZombie
 var animals := {}  # id -> SimAnimal
 var stockpile := {}  # resource kind -> int
+var pois := {}  # id -> SimPoi
+## 1 for each fog block (FOG_BLOCK cells a side) someone has seen.
+var explored := PackedByteArray()
+## Groups asking to join: {"id", "poi" (-1 if they came to the base), "expires", "people"},
+## each of the people a {"first_name", "surname", "sex", "age", "skills"}.
+var offers := []
+## False stops survivors from turning up at the base.
+var arrivals_enabled := true
 ## Everyone who died: {"name", "age", "cause", "day"}.
 var memorial := []
 ## False stops new zombies from arriving at the map edge.
@@ -33,8 +41,11 @@ var alarm := false
 var events: Array[String] = []
 ## Shots fired this tick, as [from, to] in cell space, for the view to draw. Not saved.
 var shots := []
+## Fog blocks explored since the view last cleared this. Not saved.
+var revealed: Array[Vector2i] = []
 
 var _next_id := 1
+var _next_offer_id := 1
 ## Resource kind -> last place the community found it, so most searches are a lookup.
 var _source_hints := {}
 ## Resource kind -> tick until which it is assumed to be out of range.
@@ -49,6 +60,9 @@ var _region := PackedInt32Array()  # cell -> region label, -1 for solid cells
 var _region_parent := PackedInt32Array()  # union-find over region labels
 var _relabel_tick := 0
 var _occupied := {}  # Vector2i -> building id
+var _poi_cells := {}  # Vector2i -> point of interest id
+var _fog_cols := 0
+var _fog_rows := 0
 var _people_index: SpatialIndex
 var _zombie_index: SpatialIndex
 var _paths_left := 0
@@ -158,6 +172,10 @@ static func new_game(world_seed: int, size := Defs.MAP_SIZE) -> GameState:
 		var c := Vector2i(rng.randi_range(0, size - 1), rng.randi_range(0, size - 1))
 		if s.is_walkable(c) and (c - home).length() > Defs.ZOMBIE_START_DISTANCE:
 			s.spawn_zombie(c)
+
+	Exploration.generate_pois(s, world_seed, home, father.cell())
+	Exploration.reveal(s, Vector2(home), Defs.START_SIGHT)
+	s.revealed.clear()
 	return s
 
 
@@ -189,6 +207,15 @@ func is_walkable(c: Vector2i) -> bool:
 
 func building_at(c: Vector2i) -> SimBuilding:
 	return buildings.get(_occupied.get(c, -1))
+
+
+func poi_at(c: Vector2i) -> SimPoi:
+	return pois.get(_poi_cells.get(c, -1))
+
+
+func is_explored(c: Vector2i) -> bool:
+	@warning_ignore("integer_division")
+	return in_bounds(c) and explored[(c.y / Defs.FOG_BLOCK) * _fog_cols + c.x / Defs.FOG_BLOCK] != 0
 
 
 ## Days start at dawn (START_HOUR); the first day is 1.
@@ -358,6 +385,27 @@ func order_build(ids: Array[int], building_id: int) -> void:
 		p.state = SimPerson.State.TO_BUILD
 
 
+## Sends people to a discovered point of interest to bring back what they can carry.
+func order_expedition(ids: Array[int], poi_id: int) -> void:
+	var poi: SimPoi = pois.get(poi_id)
+	if poi == null or not poi.discovered:
+		return
+	for id in ids:
+		var p := _commandable(id)
+		if p != null:
+			p.expedition = poi_id
+			p.state = SimPerson.State.TO_POI
+
+
+## Takes in a group that asked to join. False if there are not enough beds for them.
+func accept_offer(offer_id: int) -> bool:
+	return Exploration.accept(self, offer_id)
+
+
+func refuse_offer(offer_id: int) -> void:
+	Exploration.refuse(self, offer_id)
+
+
 ## Allows or forbids a kind of work. Forbidding it stops anyone doing it right now.
 func set_job(ids: Array[int], work: String, allowed: bool) -> void:
 	for id in ids:
@@ -450,6 +498,7 @@ func step() -> void:
 		p.prev_pos = p.pos
 		if _tick_needs(p):
 			_tick_person(p)
+			Exploration.look(self, p)
 	for z: SimZombie in zombies.values():
 		z.prev_pos = z.pos
 		_tick_zombie(z)
@@ -457,8 +506,12 @@ func step() -> void:
 		a.prev_pos = a.pos
 		_tick_animal(a)
 	var time_of_day := tick % Defs.DAY_TICKS
+	if not offers.is_empty() and tick % 50 == 0:
+		Exploration.expire_offers(self)
 	if time_of_day == 0:
 		_respawn_animals()
+		if arrivals_enabled:
+			Exploration.arrivals(self)
 	elif time_of_day == DUSK_TICK and zombies_enabled:
 		_zombies_arrive()
 
@@ -573,7 +626,12 @@ func _tick_person(p: SimPerson) -> void:
 			or p.state == SimPerson.State.SHELTERED
 	if not facing_danger and p.state != SimPerson.State.SLEEPING and p.state != SimPerson.State.TO_BED:
 		var pushing := p.pushed and p.state != SimPerson.State.IDLE
-		if p.energy <= (Defs.EXHAUSTED if pushing else Defs.TIRED):
+		if p.expedition >= 0:
+			# Far from any bed: sleep on the spot, unless home is just ahead.
+			var nearly_home := p.state == SimPerson.State.TO_DROPOFF and p.path.size() < Defs.CAMP_SKIP_STEPS
+			if p.energy <= (Defs.EXHAUSTED if pushing or nearly_home else Defs.TIRED):
+				Exploration.camp(p)
+		elif p.energy <= (Defs.EXHAUSTED if pushing else Defs.TIRED):
 			_go_to_bed(p)
 	if not zombies.is_empty() and (tick + p.id) % Defs.THREAT_CHECK_TICKS == 0:
 		_react_to_threat(p)
@@ -581,6 +639,7 @@ func _tick_person(p: SimPerson) -> void:
 	match p.state:
 		SimPerson.State.IDLE:
 			p.ordered = false
+			p.expedition = -1
 			p.work = ""
 			if tick >= p.idle_until and _decisions_left > 0:
 				_decisions_left -= 1
@@ -624,10 +683,13 @@ func _tick_person(p: SimPerson) -> void:
 			if drop == null:
 				p.state = SimPerson.State.IDLE
 			elif _is_adjacent(p.cell(), drop.cell, drop.get_def().size):
-				if p.carry_amount > 0:
-					stockpile[p.carry_kind] += p.carry_amount
+				var delivered := p.carry_amount
+				if delivered > 0:
+					stockpile[p.carry_kind] += delivered
 					p.carry_amount = 0
-				if p.work != "" and need(p.gather_kind) <= 0.0:
+				if p.expedition >= 0:
+					Exploration.finish(self, p, delivered)
+				elif p.work != "" and need(p.gather_kind) <= 0.0:
 					p.state = SimPerson.State.IDLE  # the community has enough of this
 				elif source_yield(p.target_cell) == p.gather_kind:
 					p.state = SimPerson.State.TO_RESOURCE
@@ -711,7 +773,10 @@ func _tick_person(p: SimPerson) -> void:
 		SimPerson.State.SLEEPING:
 			if p.energy >= 1.0:
 				_go_outside(p)
-				p.state = SimPerson.State.IDLE
+				if p.expedition >= 0:
+					Exploration.resume(self, p)  # camped on the way
+				else:
+					p.state = SimPerson.State.IDLE
 
 		SimPerson.State.TO_SHELTER:
 			var refuge: SimBuilding = buildings.get(p.shelter_building)
@@ -734,6 +799,12 @@ func _tick_person(p: SimPerson) -> void:
 
 		SimPerson.State.DEFENDING:
 			_tick_defending(p)
+
+		SimPerson.State.TO_POI:
+			Exploration.tick_to_poi(self, p)
+
+		SimPerson.State.LOOTING:
+			Exploration.tick_looting(self, p)
 
 
 func _go_to_bed(p: SimPerson) -> void:
@@ -765,6 +836,7 @@ func _commandable(id: int) -> SimPerson:
 		return null
 	_go_outside(p)
 	p.ordered = true
+	p.expedition = -1
 	p.pushed = p.energy <= Defs.TIRED
 	p.work = ""
 	p.path.clear()
@@ -820,9 +892,11 @@ func _retarget_or_deliver(p: SimPerson) -> void:
 # --- Defence ---------------------------------------------------------------
 
 ## Guards go and fight; everyone else runs for a building to hide in. People under a
-## direct order, or already indoors, are left alone.
+## direct order, or already indoors, are left alone. An expedition is on its own out
+## there: its guards fight, the others keep walking.
 func _react_to_threat(p: SimPerson) -> void:
-	if p.ordered:
+	var away := p.expedition >= 0
+	if p.ordered and not away:
 		return
 	if p.state == SimPerson.State.DEFENDING or p.state == SimPerson.State.TO_SHELTER:
 		return
@@ -848,6 +922,9 @@ func _react_to_threat(p: SimPerson) -> void:
 				var tower := _nearest_free_tower(p.pos)
 				p.post = tower.id if tower != null else -1
 			p.state = SimPerson.State.DEFENDING
+	elif away:
+		if p.state == SimPerson.State.SLEEPING and _nearest_zombie(p.pos, Defs.FLEE_RADIUS) != null:
+			Exploration.resume(self, p)  # no sleeping with zombies around
 	elif _nearest_zombie(p.pos, Defs.FLEE_RADIUS) != null:
 		var homes: Array[SimBuilding] = []
 		for b: SimBuilding in buildings.values():
@@ -916,7 +993,10 @@ func _stand_down(p: SimPerson) -> void:
 	p.post = -1
 	p.fight_target = -1
 	p.path.clear()
-	p.state = SimPerson.State.IDLE
+	if p.expedition >= 0:
+		Exploration.resume(self, p)
+	else:
+		p.state = SimPerson.State.IDLE
 
 
 func _shoot(p: SimPerson, z: SimZombie, origin: Vector2) -> void:
@@ -1590,6 +1670,16 @@ func _add_person(p: SimPerson) -> void:
 
 
 ## Requires _rebuild_derived() to have run.
+func _register_poi(poi: SimPoi) -> void:
+	pois[poi.id] = poi
+	for y in SimPoi.SIZE.y:
+		for x in SimPoi.SIZE.x:
+			var c := poi.cell + Vector2i(x, y)
+			_poi_cells[c] = poi.id
+			_set_solid(c, true)
+
+
+## Requires _rebuild_derived() to have run.
 func _register_building(b: SimBuilding) -> void:
 	buildings[b.id] = b
 	var def := b.get_def()
@@ -1609,6 +1699,11 @@ func _rebuild_derived() -> void:
 	_noise_cols = ceili(float(width) / Defs.NOISE_BUCKET)
 	_noise_rows = ceili(float(height) / Defs.NOISE_BUCKET)
 	_noise.resize(_noise_cols * _noise_rows)
+	_fog_cols = ceili(float(width) / Defs.FOG_BLOCK)
+	_fog_rows = ceili(float(height) / Defs.FOG_BLOCK)
+	if explored.size() != _fog_cols * _fog_rows:
+		explored.resize(_fog_cols * _fog_rows)
+		explored.fill(0)
 	_grid.region = Rect2i(0, 0, width, height)
 	_grid.diagonal_mode = AStarGrid2D.DIAGONAL_MODE_ONLY_IF_NO_OBSTACLES
 	_grid.update()
@@ -1643,7 +1738,12 @@ func to_dict() -> Dictionary:
 		"height": height,
 		"tick": tick,
 		"next_id": _next_id,
+		"next_offer_id": _next_offer_id,
 		"zombies_enabled": zombies_enabled,
+		"arrivals_enabled": arrivals_enabled,
+		"explored": Marshalls.raw_to_base64(explored),
+		"offers": offers.duplicate(true),
+		"pois": pois.values().map(func(poi: SimPoi) -> Dictionary: return poi.to_dict()),
 		"alarm": alarm,
 		"terrain": Marshalls.raw_to_base64(terrain),
 		"stockpile": stockpile.duplicate(),
@@ -1667,7 +1767,15 @@ static func from_dict(d: Dictionary) -> GameState:
 	s.height = int(d["height"])
 	s.tick = int(d["tick"])
 	s._next_id = int(d["next_id"])
+	s._next_offer_id = int(d["next_offer_id"])
 	s.zombies_enabled = d["zombies_enabled"]
+	s.arrivals_enabled = d["arrivals_enabled"]
+	s.explored = Marshalls.base64_to_raw(d["explored"])
+	for row: Dictionary in d["offers"]:
+		var offer: Dictionary = row.duplicate(true)
+		for field: String in ["id", "poi", "expires"]:
+			offer[field] = int(offer[field])
+		s.offers.append(offer)
 	s.alarm = d["alarm"]
 	s.terrain = Marshalls.base64_to_raw(d["terrain"])
 	for kind in Defs.RESOURCE_KINDS:
@@ -1685,6 +1793,8 @@ static func from_dict(d: Dictionary) -> GameState:
 	s._rebuild_derived()
 	for row: Dictionary in d["buildings"]:
 		s._register_building(SimBuilding.from_dict(row))
+	for row: Dictionary in d["pois"]:
+		s._register_poi(SimPoi.from_dict(row))
 	for row: Dictionary in d["people"]:
 		s._add_person(SimPerson.from_dict(row))
 	for row: Dictionary in d["zombies"]:

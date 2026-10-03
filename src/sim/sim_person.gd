@@ -6,6 +6,7 @@ extends RefCounted
 enum State {
 	IDLE, MOVING, TO_RESOURCE, GATHERING, TO_DROPOFF, TO_BUILD, BUILDING,
 	TO_BED, SLEEPING, TO_HUNT, HUNTING, TO_SHELTER, SHELTERED, DEFENDING,
+	TO_POI, LOOTING,
 }
 
 ## Fields copied as they are by to_dict / from_dict.
@@ -14,7 +15,7 @@ const SAVED: Array[String] = [
 	"satiety", "hydration", "energy", "health", "wounded",
 	"state", "ordered", "pushed", "work", "last_work", "idle_until",
 	"bed_building", "inside", "target_building", "hunt_target",
-	"shelter_building", "fight_target", "post", "cooldown",
+	"shelter_building", "fight_target", "post", "cooldown", "expedition",
 	"gather_kind", "carry_kind", "carry_amount", "work_ticks",
 ]
 
@@ -63,6 +64,9 @@ var fight_target := -1
 var post := -1
 ## Ticks until the next shot or blow.
 var cooldown := 0
+## Point of interest the person was sent to, or -1. Stays set for the whole trip, through
+## fights and nights spent on the way, until the person is back at a drop-off.
+var expedition := -1
 var dest := Vector2i(-1, -1)
 var target_cell := Vector2i(-1, -1)
 var target_building := -1
@@ -75,6 +79,8 @@ var work_ticks := 0
 # Not saved: the path is re-planned on demand, prev_pos only feeds render interpolation.
 var path: Array[Vector2i] = []
 var prev_pos := Vector2.ZERO
+## Fog block last explored from, so the fog is only touched when the person changes block.
+var seen_block := Vector2i(-1, -1)
 
 
 func cell() -> Vector2i:

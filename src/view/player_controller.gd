@@ -10,6 +10,7 @@ const PICK_RADIUS := 14.0
 var state: GameState
 var selected_people: Array[int] = []
 var selected_building := -1
+var selected_poi := -1
 ## Id of the building type being placed, or "" when not placing.
 var placing := ""
 var hover_cell := Vector2i.ZERO
@@ -23,6 +24,7 @@ var _last_dragged := Vector2i(-1, -1)
 func clear_selection() -> void:
 	selected_people.clear()
 	selected_building = -1
+	selected_poi = -1
 	placing = ""
 	dragging = false
 
@@ -105,6 +107,7 @@ func _finish_selection(world: Vector2) -> void:
 	dragging = false
 	selected_people.clear()
 	selected_building = -1
+	selected_poi = -1
 	if drag_start.distance_to(world) < CLICK_SLOP:
 		var best_dist := PICK_RADIUS
 		for p: SimPerson in state.people.values():
@@ -114,8 +117,11 @@ func _finish_selection(world: Vector2) -> void:
 				selected_people.assign([p.id])
 		if selected_people.is_empty():
 			var b := state.building_at(Iso.cell_at(world))
+			var poi := state.poi_at(Iso.cell_at(world))
 			if b != null:
 				selected_building = b.id
+			elif poi != null and poi.discovered:
+				selected_poi = poi.id
 	else:
 		var box := Rect2(drag_start, world - drag_start).abs()
 		for p: SimPerson in state.people.values():
@@ -127,7 +133,10 @@ func _issue_order(cell: Vector2i) -> void:
 	if selected_people.is_empty():
 		return
 	var b := state.building_at(cell)
-	if state.source_yield(cell) != "":
+	var poi := state.poi_at(cell)
+	if poi != null and poi.discovered:
+		state.order_expedition(selected_people, poi.id)
+	elif state.source_yield(cell) != "":
 		state.order_gather(selected_people, cell)
 	elif b != null and state.building_needs_work(b):
 		state.order_build(selected_people, b.id)

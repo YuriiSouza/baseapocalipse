@@ -1,11 +1,13 @@
 class_name Hud
 extends CanvasLayer
-## Resource bar, speed controls, selection details, work toggles and the game-over screen.
+## Resource bar, speed controls, selection details, work toggles, survivors asking to
+## join and the game-over screen.
 ## Built in code; emits signals only.
 
 signal speed_selected(speed: float)
 signal build_requested(def_id: String)
 signal job_toggled(work: String, allowed: bool)
+signal offer_answered(offer_id: int, accepted: bool)
 signal save_requested
 signal load_requested
 signal new_game_requested
@@ -20,6 +22,8 @@ var _resources: Label
 var _info: Label
 var _jobs: HBoxContainer
 var _job_buttons := {}  # work type -> Button
+var _offers: VBoxContainer
+var _offers_shown: Array[int] = []
 var _toast: Label
 var _toast_left := 0.0
 var _over: Control
@@ -75,6 +79,15 @@ func _ready() -> void:
 			var label := "%s (%s)" % [def.display_name, Defs.format_cost(def.cost)]
 			actions.add_child(_button(label, func() -> void: build_requested.emit(id)))
 
+	var offers_panel := PanelContainer.new()
+	offers_panel.grow_horizontal = Control.GROW_DIRECTION_BEGIN
+	add_child(offers_panel)
+	offers_panel.set_anchors_and_offsets_preset(Control.PRESET_TOP_RIGHT)
+	offers_panel.offset_top = 48.0
+	_offers = VBoxContainer.new()
+	offers_panel.add_child(_offers)
+	offers_panel.visible = false
+
 	_toast = Label.new()
 	_toast.grow_horizontal = Control.GROW_DIRECTION_BOTH
 	add_child(_toast)
@@ -110,7 +123,7 @@ func _process(delta: float) -> void:
 	var parts := PackedStringArray()
 	for kind in Defs.RESOURCE_KINDS:
 		parts.append("%s %d" % [Defs.RESOURCE_NAMES[kind], state.stockpile[kind]])
-	parts.append("Pessoas %d" % state.people.size())
+	parts.append("Pessoas %d (%d camas)" % [state.people.size(), state.total_beds()])
 	if state.threat_count() > 0:
 		parts.append("ZUMBIS ATACANDO: %d" % state.threat_count())
 	var hour := state.hour()
@@ -118,6 +131,7 @@ func _process(delta: float) -> void:
 	parts.append("Pausado" if speed == 0.0 else "%dx" % int(speed))
 	_resources.text = "  " + "   |   ".join(parts)
 	_info.text = _describe_selection()
+	_refresh_offers()
 
 	# The toggles mirror the first selected person; a click applies to the whole selection.
 	var first: SimPerson = null
@@ -136,6 +150,37 @@ func _process(delta: float) -> void:
 	_over.visible = state.is_over()
 
 
+## Rebuilds the list of groups asking to join, only when it changed.
+func _refresh_offers() -> void:
+	var ids: Array[int] = []
+	for offer: Dictionary in state.offers:
+		ids.append(int(offer["id"]))
+	if ids == _offers_shown:
+		return
+	_offers_shown = ids
+	for child in _offers.get_children():
+		child.queue_free()
+	(_offers.get_parent() as Control).visible = not ids.is_empty()
+	for offer: Dictionary in state.offers:
+		var id := int(offer["id"])
+		var poi: SimPoi = state.pois.get(offer["poi"])
+		var lines := PackedStringArray([
+			"Encontrados em %s:" % poi.display_name() if poi != null else "Pedem abrigo:"])
+		for row: Dictionary in offer["people"]:
+			var skills := PackedStringArray()
+			for skill: String in row["skills"]:
+				skills.append("%s %d" % [Defs.SKILL_NAMES[skill], int(row["skills"][skill])])
+			lines.append("  %s %s, %d anos%s" % [row["first_name"], row["surname"], int(row["age"]),
+				" (%s)" % ", ".join(skills) if not skills.is_empty() else ""])
+		var text := Label.new()
+		text.text = "\n".join(lines)
+		_offers.add_child(text)
+		var buttons := HBoxContainer.new()
+		_offers.add_child(buttons)
+		buttons.add_child(_button("Aceitar", func() -> void: offer_answered.emit(id, true)))
+		buttons.add_child(_button("Recusar", func() -> void: offer_answered.emit(id, false)))
+
+
 func _describe_selection() -> String:
 	if controller.placing != "":
 		return "Clique para posicionar (Shift mantém). Botão direito ou Esc cancela."
@@ -144,11 +189,23 @@ func _describe_selection() -> String:
 		if p != null:
 			return _describe_person(p)
 	if not controller.selected_people.is_empty():
-		return "%d pessoas. Botão direito: mover, coletar ou construir." % controller.selected_people.size()
+		return "%d pessoas. Botão direito: mover, coletar, construir ou enviar a um local." % controller.selected_people.size()
 	var building: SimBuilding = state.buildings.get(controller.selected_building)
 	if building != null:
 		return _describe_building(building)
+	var poi: SimPoi = state.pois.get(controller.selected_poi)
+	if poi != null:
+		return _describe_poi(poi)
 	return "Arraste para selecionar pessoas. WASD move a câmera, scroll dá zoom, B constrói casa."
+
+
+func _describe_poi(poi: SimPoi) -> String:
+	var how := "Selecione pessoas e clique aqui com o botão direito para enviar uma expedição."
+	if not poi.visited:
+		return "%s: ninguém esteve aqui ainda.\n%s" % [poi.display_name(), how]
+	if poi.loot_left() == 0:
+		return "%s: não sobrou nada." % poi.display_name()
+	return "%s: resta %s.\n%s" % [poi.display_name(), Defs.format_cost(poi.loot), how]
 
 
 func _describe_building(b: SimBuilding) -> String:
@@ -194,7 +251,13 @@ func _activity(p: SimPerson) -> String:
 		SimPerson.State.TO_RESOURCE, SimPerson.State.GATHERING:
 			return "coletando %s" % what
 		SimPerson.State.TO_DROPOFF:
+			if p.expedition >= 0:
+				return "voltando da expedição" + (" com %s" % what if p.carry_amount > 0 else "")
 			return "levando %s para o estoque" % what
+		SimPerson.State.TO_POI:
+			return "em expedição para %s" % (state.pois[p.expedition] as SimPoi).display_name()
+		SimPerson.State.LOOTING:
+			return "saqueando %s" % what
 		SimPerson.State.TO_BUILD, SimPerson.State.BUILDING:
 			var site: SimBuilding = state.buildings.get(p.target_building)
 			if site != null and site.is_complete():
@@ -213,6 +276,8 @@ func _activity(p: SimPerson) -> String:
 		SimPerson.State.TO_BED:
 			return "indo dormir"
 		SimPerson.State.SLEEPING:
+			if p.expedition >= 0:
+				return "acampado no caminho"
 			return "dormindo" if p.inside >= 0 else "dormindo no chão"
 	return "sem tarefa"
 

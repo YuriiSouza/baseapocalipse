@@ -39,17 +39,27 @@ Não há vitória: o jogo termina quando a comunidade morre.
 
 Cada etapa termina com algo jogável e com testes da simulação em `tests/`.
 
-Estado: etapas 0, 1, 2 e 3 implementadas. Próxima: etapa 4.
+Estado: etapas 0, 1, 2, 3 e 4 implementadas. Próxima: etapa 5.
 
 Pendências conhecidas das etapas feitas:
-- Nenhuma etapa foi conferida visualmente: os testes rodam sem janela.
-- Munição e remédios não têm fonte; só existe o estoque inicial. Entram com o saque da etapa 4.
+- A conferência visual é parcial: névoa, locais no mapa, painel de sobreviventes e textos do
+  HUD foram vistos em capturas de tela; cliques e arrasto do mouse nunca foram exercitados
+  (os testes rodam sem janela).
+- Munição e remédios só vêm do saque, que é finito: não há fonte renovável. No teste de
+  crescimento a comunidade chega a 20 pessoas com a munição zerada.
+- A névoa só registra o que já foi explorado: zumbis e animais aparecem em qualquer área
+  explorada, mesmo sem ninguém por perto.
+- Uma expedição faz uma viagem por ordem e cada pessoa traz um único tipo de recurso.
+- Recusar sobreviventes não tem custo; a consequência entra com a moral (etapa 6).
+- Crianças que chegam com um grupo não têm vínculo de parentesco com os adultos dele.
 - Fumaça não existe como fonte de atração; só barulho de trabalho, luz das casas à noite e tiros.
 - Cerca, paliçada e muro estão todos liberados desde o início; os degraus por conhecimento
   entram na etapa 5.
 - Zumbis não calculam rota: contornam obstáculos por tentativa e podem ficar presos atrás de
   florestas e lagos grandes.
-- `src/sim/game_state.gd` passou de 1600 linhas e deve ser dividido (pessoas, zumbis, trabalho).
+- `src/sim/game_state.gd` passou de 1800 linhas e deve ser dividido (pessoas, zumbis, trabalho).
+  As regras da etapa 4 já ficam à parte, em `src/sim/exploration.gd`, como funções estáticas
+  sobre o estado; o mesmo formato serve para a divisão.
 - Lenha ainda não é consumida; a madeira só tem meta de estoque. O consumo entra com as
   estações (etapa 6), quando houver consequência para a falta.
 - Habilidades existem como dado, mas ainda não afetam o trabalho (etapa 5).

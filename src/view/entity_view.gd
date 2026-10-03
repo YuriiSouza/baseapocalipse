@@ -24,6 +24,14 @@ const KIND_COLORS := {
 	"medicine": Color(0.9, 0.95, 0.9),
 	"ammo": Color(0.95, 0.8, 0.2),
 }
+const POI_COLORS := {
+	"farmhouse": Color(0.62, 0.48, 0.35),
+	"store": Color(0.8, 0.62, 0.3),
+	"gas": Color(0.72, 0.3, 0.28),
+	"clinic": Color(0.85, 0.88, 0.9),
+	"police": Color(0.3, 0.38, 0.6),
+	"camp": Color(0.45, 0.55, 0.35),
+}
 const NAME_SIZE := 11
 
 var state: GameState
@@ -54,7 +62,7 @@ func _draw() -> void:
 	for row in range(row_min, row_max + 1):
 		for col in range(col_min + ((row + col_min) & 1), col_max + 1, 2):
 			var cell := Vector2i((row + col) >> 1, (row - col) >> 1)
-			if state.nodes.has(cell):
+			if state.nodes.has(cell) and state.is_explored(cell):
 				items.append([row + 1.0, 0, cell])
 
 	for b: SimBuilding in state.buildings.values():
@@ -67,12 +75,15 @@ func _draw() -> void:
 			items.append([at.x + at.y, 2, p])
 	for z: SimZombie in state.zombies.values():
 		var at := z.prev_pos.lerp(z.pos, alpha)
-		if visible_rect.has_point(Iso.to_world(at)):
+		if visible_rect.has_point(Iso.to_world(at)) and state.is_explored(z.cell()):
 			items.append([at.x + at.y, 3, z])
 	for a: SimAnimal in state.animals.values():
 		var at := a.prev_pos.lerp(a.pos, alpha)
-		if visible_rect.has_point(Iso.to_world(at)):
+		if visible_rect.has_point(Iso.to_world(at)) and state.is_explored(a.cell()):
 			items.append([at.x + at.y, 4, a])
+	for poi: SimPoi in state.pois.values():
+		if poi.discovered and visible_rect.has_point(Iso.to_world(poi.center())):
+			items.append([poi.cell.x + poi.cell.y + (SimPoi.SIZE.x + SimPoi.SIZE.y) * 0.5, 5, poi])
 	items.sort_custom(func(a: Array, b: Array) -> bool: return a[0] < b[0])
 
 	for item: Array in items:
@@ -82,6 +93,7 @@ func _draw() -> void:
 			2: _draw_person(item[2])
 			3: _draw_zombie(item[2])
 			4: _draw_animal(item[2])
+			5: _draw_poi(item[2])
 
 	for shot: Array in state.shots:
 		var from: Vector2 = Iso.to_world(shot[0]) + Vector2(0, -12)
@@ -175,6 +187,24 @@ func _draw_animal(a: SimAnimal) -> void:
 	var at := Iso.to_world(a.prev_pos.lerp(a.pos, alpha))
 	draw_rect(Rect2(at + Vector2(-6, -9), Vector2(12, 6)), ANIMAL)
 	draw_circle(at + Vector2(7, -10), 3.0, ANIMAL)
+
+
+func _draw_poi(poi: SimPoi) -> void:
+	# Greyed out once there is nothing left to take.
+	var color: Color = POI_COLORS[poi.kind]
+	if poi.visited and poi.loot_left() == 0:
+		color = color.lerp(Color(0.35, 0.35, 0.35), 0.7)
+	var inset := Vector2(0.1, 0.1)
+	_draw_box(Vector2(poi.cell) + inset, Vector2(SimPoi.SIZE) - inset * 2.0, 26.0, color)
+	var top := Iso.to_world(poi.center()) + Vector2(0, -26.0)
+	if not poi.visited:
+		draw_string(ThemeDB.fallback_font, top + Vector2(-4, 5), "?", HORIZONTAL_ALIGNMENT_LEFT, -1, 16)
+	if controller.selected_poi == poi.id:
+		_draw_outline(Iso.diamond(Vector2(poi.cell), Vector2(SimPoi.SIZE)))
+		var font := ThemeDB.fallback_font
+		var width := font.get_string_size(poi.display_name(), HORIZONTAL_ALIGNMENT_LEFT, -1, NAME_SIZE).x
+		draw_string(font, top + Vector2(-width * 0.5, -22.0), poi.display_name(),
+				HORIZONTAL_ALIGNMENT_LEFT, -1, NAME_SIZE)
 
 
 ## Isometric box standing on a footprint. `height` must be > 0.
