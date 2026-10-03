@@ -4,17 +4,16 @@
 
 [resource]
 script = ExtResource("1_def")
-id = "house"
-display_name = "Casa"
-size = Vector2i(2, 2)
+id = "gate"
+display_name = "Portão"
+size = Vector2i(1, 1)
 cost = {
-"wood": 80,
-"scrap": 10
+"wood": 10,
+"scrap": 5
 }
-build_ticks = 600
-max_hp = 300
-beds = 4
-is_dropoff = true
+build_ticks = 80
+max_hp = 100
+passable = true
 buildable = true
-color = Color(0.72, 0.5, 0.36, 1)
-height_px = 30.0
+color = Color(0.75, 0.62, 0.35, 1)
+height_px = 8.0

@@ -22,5 +22,7 @@ script = ExtResource("4_ctrl")
 [node name="Camera" type="Camera2D" parent="."]
 script = ExtResource("5_cam")
 
+[node name="DayNight" type="CanvasModulate" parent="."]
+
 [node name="Hud" type="CanvasLayer" parent="."]
 script = ExtResource("6_hud")

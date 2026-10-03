@@ -4,16 +4,15 @@
 
 [resource]
 script = ExtResource("1_def")
-id = "town_center"
-display_name = "Centro da Cidade"
+id = "garden"
+display_name = "Horta"
 size = Vector2i(2, 2)
 cost = {
-"wood": 275
+"wood": 20
 }
-build_ticks = 1500
-pop_cap = 5
-is_dropoff = true
-trains_villagers = true
-buildable = false
-color = Color(0.78, 0.68, 0.5, 1)
-height_px = 36.0
+build_ticks = 200
+max_hp = 40
+crop_yield = 60
+buildable = true
+color = Color(0.45, 0.33, 0.22, 1)
+height_px = 4.0

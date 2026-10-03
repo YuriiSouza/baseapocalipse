@@ -1,0 +1,118 @@
+# Plano de implementação
+
+## Visão
+
+Jogo de sobrevivência e crescimento em mundo pós-apocalíptico, com a jogabilidade de um RTS
+isométrico. Começa com uma família de 4 pessoas (esposa, esposo, 2 filhos) isolada no mato no
+início do surto de zumbis e pode crescer até uma comunidade de cerca de 150 pessoas.
+Não há vitória: o jogo termina quando a comunidade morre.
+
+## Decisões fechadas
+
+- **Motor**: Godot 4.7, GDScript, 2D isométrico, single-player, Windows (desenvolvimento também no macOS).
+- **Combate**: as pessoas se defendem sozinhas; o jogador decide posicionamento, fortificações e fuga.
+- **Necessidades**: fome e descanso por pessoa, mais moral da comunidade.
+- **Mapa**: grande e fixo por partida (256x256) com névoa. Mundo infinito fica para reavaliar depois.
+- **Conhecimento**: os atributos são da comunidade, derivados das habilidades dos indivíduos.
+  Pode ser perdido com mortes e preservado por ensino e livros.
+- **Ameaça**: poucos zumbis no começo; aumentam com o tempo e com a atividade da comunidade
+  (barulho, fumaça, luz).
+- **Crescimento**: por sobreviventes encontrados e por filhos nascidos na comunidade.
+
+## Consequências da meta de 150 pessoas
+
+- **Trabalho automático**: com 4 pessoas o jogador dá ordens diretas; com 150 isso é inviável.
+  As pessoas precisam escolher tarefas sozinhas a partir de funções e prioridades definidas
+  pelo jogador. Ordens diretas continuam existindo como exceção.
+- **Orçamento de simulação**: 150 pessoas mais centenas de zumbis a 10 ticks/s em GDScript exige
+  índice espacial para buscas de vizinhança, decisões de IA escalonadas (não todo tick) e limite
+  de buscas de caminho por tick.
+- **Zumbis baratos**: zumbis não usam A*; seguem um campo de atração (barulho/cheiro) com
+  desvio local simples.
+- **Renderização**: o terreno é desenhado em blocos (chunks) que o motor descarta quando estão
+  fora da tela; passa a TileMapLayer quando houver arte de verdade. Entidades fora da tela não
+  são desenhadas.
+- **Interface de gestão**: lista de pessoas, painel da comunidade e alertas, em vez de depender
+  de selecionar indivíduos no mapa.
+
+## Etapas
+
+Cada etapa termina com algo jogável e com testes da simulação em `tests/`.
+
+Estado: etapas 0, 1, 2 e 3 implementadas. Próxima: etapa 4.
+
+Pendências conhecidas das etapas feitas:
+- Nenhuma etapa foi conferida visualmente: os testes rodam sem janela.
+- Munição e remédios não têm fonte; só existe o estoque inicial. Entram com o saque da etapa 4.
+- Fumaça não existe como fonte de atração; só barulho de trabalho, luz das casas à noite e tiros.
+- Cerca, paliçada e muro estão todos liberados desde o início; os degraus por conhecimento
+  entram na etapa 5.
+- Zumbis não calculam rota: contornam obstáculos por tentativa e podem ficar presos atrás de
+  florestas e lagos grandes.
+- `src/sim/game_state.gd` passou de 1600 linhas e deve ser dividido (pessoas, zumbis, trabalho).
+- Lenha ainda não é consumida; a madeira só tem meta de estoque. O consumo entra com as
+  estações (etapa 6), quando houver consequência para a falta.
+- Habilidades existem como dado, mas ainda não afetam o trabalho (etapa 5).
+- As funções padrão de uma criança não mudam sozinhas quando ela vira adulta (etapa 6).
+
+Testes, a partir da pasta do projeto:
+
+    godot --headless --path . -s res://tests/sim_smoke.gd
+    godot --headless --path . -s res://tests/load_test.gd
+
+### Etapa 0 — Fundação para escala
+- Mapa 256x256 com terreno em blocos e limites de câmera.
+- Zumbi mínimo (vaga e persegue quem vê, sem combate) para o teste de carga ser realista.
+- Índice espacial e fila de buscas de caminho com orçamento por tick.
+- Teste de carga sem janela: 150 pessoas e 500 zumbis simulados, medindo o tempo por tick.
+- Critério: o tick médio cabe com folga no orçamento a 5x de velocidade.
+
+### Etapa 1 — A família
+- `Pessoa` substitui o aldeão: nome, idade, parentesco, habilidades, fome, descanso, saúde.
+- Recursos novos: comida, água, madeira, sucata, remédios, munição.
+- Consumo diário por pessoa, ciclo de dia e noite, casa inicial com camas e estoque.
+- Morte permanente e fim de jogo quando todos morrem.
+- Critério: a família de 4 sobrevive ou morre de fome conforme as decisões do jogador.
+
+### Etapa 2 — Trabalho automático
+- Funções e prioridades por pessoa (coletar, caçar, plantar, construir, carregar, vigiar).
+- Pessoas escolhem tarefas sozinhas, comem e dormem por conta própria.
+- Produção sustentável: horta, caça, poço, lenha.
+- Critério: a família se mantém por um ano de jogo sem ordens diretas.
+
+### Etapa 3 — Zumbis e defesa
+- Zumbis com atração por barulho, fumaça e luz; mais ativos à noite.
+- Defesa automática, ferimentos e tratamento.
+- Fortificações em degraus: cerca, paliçada, muro, torre de vigia, armadilhas.
+- Ritmo de ameaça que cresce com os anos e com o tamanho da comunidade.
+- Critério: uma base sem defesas cai; uma base fortificada resiste.
+
+### Etapa 4 — Exploração e sobreviventes
+- Névoa sobre o mapa e pontos de interesse com saque finito.
+- Expedições: grupo enviado, risco proporcional à distância, base desprotegida.
+- Sobreviventes encontrados ou que chegam; aceitar ou recusar.
+- Mais casas e limite de moradia.
+- Critério: a comunidade passa de 4 para cerca de 20 pessoas por exploração.
+
+### Etapa 5 — Conhecimento
+- Habilidades crescem com a prática; nível da comunidade derivado dos indivíduos.
+- Conhecimento desbloqueia construções, receitas e melhorias (dados em `data/`).
+- Ensino entre pessoas, livros encontrados ou escritos, perda de conhecimento por morte.
+- Critério: perder o único especialista bloqueia algo que antes era possível.
+
+### Etapa 6 — Longo prazo
+- Estações do ano, moral da comunidade.
+- Casais, nascimentos, crianças que crescem e aprendem com os adultos.
+- Hordas migratórias e eventos.
+- Interface de gestão para comunidades grandes.
+- Balanceamento do arco família, abrigo, assentamento, comunidade, vila.
+- Critério: uma partida chega a 150 pessoas com desempenho estável.
+
+### Etapa 7 — Acabamento
+- Arte e animações definitivas, som e música.
+- Menu, opções, vários saves.
+- Exportação para Windows.
+
+## Em aberto
+
+- Nome do jogo (o repositório se chama `baseapocalipse`; o projeto ainda se chama "Imperio").

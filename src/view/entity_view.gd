@@ -6,19 +6,29 @@ const HALF := Vector2(0.5, 0.5)
 const TRUNK := Color(0.4, 0.27, 0.15)
 const LEAVES := Color(0.13, 0.36, 0.17)
 const BUSH := Color(0.2, 0.45, 0.2)
-const VILLAGER := Color(0.2, 0.4, 0.85)
+const WRECK := Color(0.5, 0.33, 0.25)
+const CLOTHES_M := Color(0.2, 0.4, 0.85)
+const CLOTHES_F := Color(0.75, 0.3, 0.55)
 const SKIN := Color(0.93, 0.78, 0.62)
 const SCAFFOLD := Color(0.85, 0.8, 0.65)
+const ZOMBIE_BODY := Color(0.35, 0.3, 0.28)
+const ZOMBIE_SKIN := Color(0.55, 0.7, 0.5)
+const ANIMAL := Color(0.6, 0.45, 0.3)
+const CROP_GROWING := Color(0.45, 0.65, 0.3)
+const CROP_RIPE := Color(0.8, 0.72, 0.25)
 const KIND_COLORS := {
 	"food": Color(0.85, 0.2, 0.25),
+	"water": Color(0.3, 0.6, 0.95),
 	"wood": Color(0.55, 0.36, 0.2),
-	"stone": Color(0.6, 0.6, 0.62),
-	"gold": Color(0.95, 0.8, 0.2),
+	"scrap": Color(0.6, 0.6, 0.62),
+	"medicine": Color(0.9, 0.95, 0.9),
+	"ammo": Color(0.95, 0.8, 0.2),
 }
+const NAME_SIZE := 11
 
 var state: GameState
 var controller: PlayerController
-## Fraction of the current tick already elapsed, for smooth unit movement.
+## Fraction of the current tick already elapsed, for smooth movement.
 var alpha := 1.0
 
 
@@ -34,22 +44,49 @@ func _draw() -> void:
 
 	# [depth, type, payload]; deeper (larger x + y) is drawn later.
 	var items := []
-	for cell: Vector2i in state.nodes:
-		if visible_rect.has_point(Iso.to_world(Vector2(cell) + HALF)):
-			items.append([cell.x + cell.y + 1.0, 0, cell])
+
+	# Walk only the cells on screen. In iso space a screen row is x + y = const and a
+	# screen column is x - y = const, so iterate those two instead of x and y.
+	var row_min := floori(visible_rect.position.y / Iso.HALF_H)
+	var row_max := ceili(visible_rect.end.y / Iso.HALF_H)
+	var col_min := floori(visible_rect.position.x / Iso.HALF_W)
+	var col_max := ceili(visible_rect.end.x / Iso.HALF_W)
+	for row in range(row_min, row_max + 1):
+		for col in range(col_min + ((row + col_min) & 1), col_max + 1, 2):
+			var cell := Vector2i((row + col) >> 1, (row - col) >> 1)
+			if state.nodes.has(cell):
+				items.append([row + 1.0, 0, cell])
+
 	for b: SimBuilding in state.buildings.values():
 		var size := b.get_def().size
-		items.append([b.cell.x + b.cell.y + (size.x + size.y) * 0.5, 1, b])
-	for u: SimUnit in state.units.values():
-		var p := u.prev_pos.lerp(u.pos, alpha)
-		items.append([p.x + p.y, 2, u])
+		if visible_rect.has_point(Iso.to_world(Vector2(b.cell) + Vector2(size) * 0.5)):
+			items.append([b.cell.x + b.cell.y + (size.x + size.y) * 0.5, 1, b])
+	for p: SimPerson in state.people.values():
+		var at := p.prev_pos.lerp(p.pos, alpha)
+		if p.inside < 0 and visible_rect.has_point(Iso.to_world(at)):
+			items.append([at.x + at.y, 2, p])
+	for z: SimZombie in state.zombies.values():
+		var at := z.prev_pos.lerp(z.pos, alpha)
+		if visible_rect.has_point(Iso.to_world(at)):
+			items.append([at.x + at.y, 3, z])
+	for a: SimAnimal in state.animals.values():
+		var at := a.prev_pos.lerp(a.pos, alpha)
+		if visible_rect.has_point(Iso.to_world(at)):
+			items.append([at.x + at.y, 4, a])
 	items.sort_custom(func(a: Array, b: Array) -> bool: return a[0] < b[0])
 
 	for item: Array in items:
 		match item[1]:
 			0: _draw_node(item[2])
 			1: _draw_building(item[2])
-			2: _draw_unit(item[2])
+			2: _draw_person(item[2])
+			3: _draw_zombie(item[2])
+			4: _draw_animal(item[2])
+
+	for shot: Array in state.shots:
+		var from: Vector2 = Iso.to_world(shot[0]) + Vector2(0, -12)
+		var to: Vector2 = Iso.to_world(shot[1]) + Vector2(0, -10)
+		draw_line(from, to, Color(1.0, 0.95, 0.6), 1.5)
 
 	if controller.placing != "":
 		var def := Defs.building(controller.placing)
@@ -75,36 +112,69 @@ func _draw_node(cell: Vector2i) -> void:
 			draw_circle(center + Vector2(0, -6), 10.0, BUSH)
 			for offset: Vector2 in [Vector2(-4, -8), Vector2(3, -10), Vector2(1, -3)]:
 				draw_circle(center + offset, 2.0, KIND_COLORS["food"])
+		"carcass":
+			draw_rect(Rect2(center + Vector2(-8, -5), Vector2(16, 6)), ANIMAL.darkened(0.3))
+			draw_circle(center + Vector2(4, -3), 2.0, KIND_COLORS["food"])
 		_:
-			var yields: String = Defs.NODE_KINDS[kind]["yields"]
-			_draw_box(Vector2(cell) + Vector2(0.2, 0.2), Vector2(0.6, 0.6), 10.0, KIND_COLORS[yields])
+			_draw_box(Vector2(cell) + Vector2(0.15, 0.15), Vector2(0.7, 0.7), 12.0, WRECK)
 
 
 func _draw_building(b: SimBuilding) -> void:
 	var def := b.get_def()
 	var ratio := clampf(float(b.progress) / maxi(1, def.build_ticks), 0.0, 1.0)
 	var color := def.color if ratio >= 1.0 else def.color.lerp(SCAFFOLD, 0.6)
+	if b.stock > 0:
+		color = CROP_RIPE
+	elif b.ripe_tick > 0:
+		var growth := 1.0 - float(b.ripe_tick - state.tick) / Defs.GROW_TICKS
+		color = def.color.lerp(CROP_GROWING, clampf(growth, 0.2, 1.0))
 	var inset := Vector2(0.08, 0.08)
 	_draw_box(Vector2(b.cell) + inset, Vector2(def.size) - inset * 2.0, lerpf(4.0, def.height_px, ratio), color)
 	if controller.selected_building == b.id:
 		_draw_outline(Iso.diamond(Vector2(b.cell), Vector2(def.size)))
-
 	var bar_pos := Iso.to_world(Vector2(b.cell) + Vector2(def.size) * 0.5) + Vector2(0, -def.height_px - 16.0)
 	if ratio < 1.0:
 		_draw_bar(bar_pos, ratio, Color.ORANGE)
-	elif b.train_queue > 0:
-		_draw_bar(bar_pos, float(b.train_progress) / Defs.VILLAGER_TRAIN_TICKS, Color.SKY_BLUE)
+	elif b.is_damaged():
+		_draw_bar(bar_pos, float(b.hp) / def.max_hp, Color.RED)
 
 
-func _draw_unit(u: SimUnit) -> void:
-	var cell_pos := u.prev_pos.lerp(u.pos, alpha)
-	var p := Iso.to_world(cell_pos)
-	if controller.selected_units.has(u.id):
+func _draw_person(p: SimPerson) -> void:
+	var cell_pos := p.prev_pos.lerp(p.pos, alpha)
+	var at := Iso.to_world(cell_pos)
+	var selected := controller.selected_people.has(p.id)
+	if selected:
 		_draw_outline(Iso.diamond(cell_pos - Vector2(0.3, 0.3), Vector2(0.6, 0.6)))
-	draw_rect(Rect2(p + Vector2(-3, -12), Vector2(6, 11)), VILLAGER)
-	draw_circle(p + Vector2(0, -15), 4.0, SKIN)
-	if u.carry_amount > 0:
-		draw_circle(p + Vector2(6, -8), 3.0, KIND_COLORS[u.carry_kind])
+	var s := 0.7 if p.is_child(state.day()) else 1.0
+	var clothes := CLOTHES_F if p.sex == "f" else CLOTHES_M
+	if p.state == SimPerson.State.SLEEPING:
+		# Lying on the ground.
+		draw_rect(Rect2(at + Vector2(-7, -5) * s, Vector2(11, 5) * s), clothes)
+		draw_circle(at + Vector2(7, -3) * s, 3.5 * s, SKIN)
+	else:
+		draw_rect(Rect2(at + Vector2(-3, -12) * s, Vector2(6, 11) * s), clothes)
+		draw_circle(at + Vector2(0, -15) * s, 4.0 * s, SKIN)
+		if p.carry_amount > 0:
+			draw_circle(at + Vector2(6, -8) * s, 3.0, KIND_COLORS[p.carry_kind])
+	if p.wounded or p.health < 0.6:
+		draw_circle(at + Vector2(0, -24) * s, 2.5, Color.RED)
+	if selected:
+		var font := ThemeDB.fallback_font
+		var width := font.get_string_size(p.first_name, HORIZONTAL_ALIGNMENT_LEFT, -1, NAME_SIZE).x
+		draw_string(font, at + Vector2(-width * 0.5, -28.0 * s), p.first_name,
+				HORIZONTAL_ALIGNMENT_LEFT, -1, NAME_SIZE)
+
+
+func _draw_zombie(z: SimZombie) -> void:
+	var at := Iso.to_world(z.prev_pos.lerp(z.pos, alpha))
+	draw_rect(Rect2(at + Vector2(-3, -12), Vector2(6, 11)), ZOMBIE_BODY)
+	draw_circle(at + Vector2(0, -15), 4.0, ZOMBIE_SKIN if z.health > 0.5 else ZOMBIE_SKIN.darkened(0.4))
+
+
+func _draw_animal(a: SimAnimal) -> void:
+	var at := Iso.to_world(a.prev_pos.lerp(a.pos, alpha))
+	draw_rect(Rect2(at + Vector2(-6, -9), Vector2(12, 6)), ANIMAL)
+	draw_circle(at + Vector2(7, -10), 3.0, ANIMAL)
 
 
 ## Isometric box standing on a footprint. `height` must be > 0.

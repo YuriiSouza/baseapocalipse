@@ -3,8 +3,11 @@ extends Camera2D
 
 const PAN_SPEED := 700.0
 const ZOOM_STEP := 1.1
-const ZOOM_MIN := 0.4
+const ZOOM_MIN := 0.5
 const ZOOM_MAX := 2.5
+
+## World-space area the camera centre may not leave. Zero size means unbounded.
+var bounds := Rect2()
 
 
 func _process(delta: float) -> void:
@@ -17,7 +20,7 @@ func _process(delta: float) -> void:
 		dir.y -= 1.0
 	if Input.is_physical_key_pressed(KEY_S) or Input.is_physical_key_pressed(KEY_DOWN):
 		dir.y += 1.0
-	position += dir.normalized() * PAN_SPEED * delta / zoom.x
+	_move_to(position + dir.normalized() * PAN_SPEED * delta / zoom.x)
 
 
 func _unhandled_input(event: InputEvent) -> void:
@@ -27,7 +30,13 @@ func _unhandled_input(event: InputEvent) -> void:
 		elif event.button_index == MOUSE_BUTTON_WHEEL_DOWN:
 			_zoom_by(1.0 / ZOOM_STEP)
 	elif event is InputEventMouseMotion and event.button_mask & MOUSE_BUTTON_MASK_MIDDLE:
-		position -= event.relative / zoom.x
+		_move_to(position - event.relative / zoom.x)
+
+
+func _move_to(target: Vector2) -> void:
+	if bounds.has_area():
+		target = target.clamp(bounds.position, bounds.end)
+	position = target
 
 
 func _zoom_by(factor: float) -> void:

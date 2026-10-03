@@ -8,7 +8,7 @@ const CLICK_SLOP := 6.0
 const PICK_RADIUS := 14.0
 
 var state: GameState
-var selected_units: Array[int] = []
+var selected_people: Array[int] = []
 var selected_building := -1
 ## Id of the building type being placed, or "" when not placing.
 var placing := ""
@@ -16,9 +16,12 @@ var hover_cell := Vector2i.ZERO
 var dragging := false
 var drag_start := Vector2.ZERO
 
+var _drag_placing := false
+var _last_dragged := Vector2i(-1, -1)
+
 
 func clear_selection() -> void:
-	selected_units.clear()
+	selected_people.clear()
 	selected_building = -1
 	placing = ""
 	dragging = false
@@ -28,24 +31,35 @@ func begin_placement(def_id: String) -> void:
 	placing = def_id
 
 
-func train_villager() -> void:
-	if selected_building < 0:
-		return
-	if not state.queue_villager(selected_building):
-		notice.emit("Recursos insuficientes")
-	elif state.units.size() >= state.pop_cap():
-		notice.emit("Limite de população: construa mais casas")
+## Applies to everyone selected.
+func set_job(work: String, allowed: bool) -> void:
+	state.set_job(selected_people, work, allowed)
 
 
 func _process(_delta: float) -> void:
+	if state == null:
+		return
 	hover_cell = Iso.cell_at(get_global_mouse_position())
+	# People can die while selected.
+	for i in range(selected_people.size() - 1, -1, -1):
+		if not state.people.has(selected_people[i]):
+			selected_people.remove_at(i)
+	# Fences and walls are laid by dragging: one piece per cell the mouse passes over.
+	if placing != "" and Defs.building(placing).drag_place and hover_cell != _last_dragged \
+			and Input.is_mouse_button_pressed(MOUSE_BUTTON_LEFT) and _drag_placing:
+		_last_dragged = hover_cell
+		var id := state.place_building(placing, hover_cell)
+		if id >= 0:
+			state.order_build(selected_people, id)
+	if not Input.is_mouse_button_pressed(MOUSE_BUTTON_LEFT):
+		_drag_placing = false
 	# The release can be swallowed by the HUD, so do not rely on the event alone.
 	if dragging and not Input.is_mouse_button_pressed(MOUSE_BUTTON_LEFT):
 		_finish_selection(get_global_mouse_position())
 
 
 func _unhandled_input(event: InputEvent) -> void:
-	if state == null:
+	if state == null or state.is_over():
 		return
 	if event is InputEventMouseButton:
 		var world := get_global_mouse_position()
@@ -70,8 +84,6 @@ func _unhandled_input(event: InputEvent) -> void:
 				placing = ""
 			KEY_B:
 				begin_placement("house")
-			KEY_Q:
-				train_villager()
 
 
 func _place(cell: Vector2i, keep_placing: bool) -> void:
@@ -80,40 +92,48 @@ func _place(cell: Vector2i, keep_placing: bool) -> void:
 		var affordable := state.can_afford(Defs.building(placing).cost)
 		notice.emit("Não é possível construir aqui" if affordable else "Recursos insuficientes")
 		return
-	state.order_build(selected_units, id)
-	if not keep_placing:
+	state.order_build(selected_people, id)
+	if Defs.building(placing).drag_place:
+		# Stays in placing mode; holding the button keeps laying pieces.
+		_drag_placing = true
+		_last_dragged = cell
+	elif not keep_placing:
 		placing = ""
 
 
 func _finish_selection(world: Vector2) -> void:
 	dragging = false
-	selected_units.clear()
+	selected_people.clear()
 	selected_building = -1
 	if drag_start.distance_to(world) < CLICK_SLOP:
 		var best_dist := PICK_RADIUS
-		for u: SimUnit in state.units.values():
-			var dist := (Iso.to_world(u.pos) + Vector2(0, -8)).distance_to(world)
-			if dist < best_dist:
+		for p: SimPerson in state.people.values():
+			var dist := (Iso.to_world(p.pos) + Vector2(0, -8)).distance_to(world)
+			if p.inside < 0 and dist < best_dist:
 				best_dist = dist
-				selected_units.assign([u.id])
-		if selected_units.is_empty():
+				selected_people.assign([p.id])
+		if selected_people.is_empty():
 			var b := state.building_at(Iso.cell_at(world))
 			if b != null:
 				selected_building = b.id
 	else:
 		var box := Rect2(drag_start, world - drag_start).abs()
-		for u: SimUnit in state.units.values():
-			if box.has_point(Iso.to_world(u.pos)):
-				selected_units.append(u.id)
+		for p: SimPerson in state.people.values():
+			if p.inside < 0 and box.has_point(Iso.to_world(p.pos)):
+				selected_people.append(p.id)
 
 
 func _issue_order(cell: Vector2i) -> void:
-	if selected_units.is_empty():
+	if selected_people.is_empty():
 		return
 	var b := state.building_at(cell)
-	if state.nodes.has(cell):
-		state.order_gather(selected_units, cell)
-	elif b != null and not b.is_complete():
-		state.order_build(selected_units, b.id)
+	if state.source_yield(cell) != "":
+		state.order_gather(selected_people, cell)
+	elif b != null and state.building_needs_work(b):
+		state.order_build(selected_people, b.id)
 	else:
-		state.order_move(selected_units, cell)
+		state.order_move(selected_people, cell)
+	for id in selected_people:
+		if (state.people[id] as SimPerson).energy <= Defs.EXHAUSTED:
+			notice.emit("Alguém está exausto demais para obedecer")
+			break
