@@ -17,6 +17,7 @@ const SAVED: Array[String] = [
 	"bed_building", "inside", "target_building", "hunt_target",
 	"shelter_building", "fight_target", "post", "cooldown", "expedition",
 	"study_skill", "writing", "recipe",
+	"pregnant_until", "last_birth", "baby_father",
 	"gather_kind", "carry_kind", "carry_amount", "work_ticks",
 ]
 
@@ -29,6 +30,10 @@ var birth_day := 0
 var mother := -1
 var father := -1
 var spouse := -1
+## Day the child she is carrying is due, or 0.
+var pregnant_until := 0
+var last_birth := -1000
+var baby_father := -1
 ## Skill id -> level (float).
 var skills := {}
 ## Work type -> allowed (bool). The person only picks work that is allowed here.

@@ -4,7 +4,8 @@ extends RefCounted
 
 const NO_GOAL := Vector2(-1.0, -1.0)
 const SAVED: Array[String] = [
-	"id", "health", "target", "siege", "lured", "hostile", "next_attack", "detour_until", "blocked"]
+	"id", "health", "target", "siege", "lured", "hostile", "next_attack", "detour_until", "blocked",
+	"spawn_day", "migrating"]
 
 var id := 0
 var pos := Vector2.ZERO
@@ -22,6 +23,11 @@ var goal := NO_GOAL
 var lured := false
 ## Chasing someone or attacking a building. Guards go after hostile zombies.
 var hostile := false
+## Day it appeared. Zombies rot away after ZOMBIE_LIFE_DAYS.
+var spawn_day := 0
+## Part of a horde crossing the map: it leaves when it reaches the far side, unless
+## something draws it away first.
+var migrating := false
 var next_attack := 0
 ## While the tick is below this, the heading is a detour around an obstacle and is kept.
 var detour_until := 0

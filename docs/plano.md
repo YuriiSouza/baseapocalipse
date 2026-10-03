@@ -39,7 +39,7 @@ Não há vitória: o jogo termina quando a comunidade morre.
 
 Cada etapa termina com algo jogável e com testes da simulação em `tests/`.
 
-Estado: etapas 0, 1, 2, 3, 4 e 5 implementadas. Próxima: etapa 6.
+Estado: etapas 0 a 6 implementadas. Próxima: etapa 7.
 
 Pendências conhecidas das etapas feitas:
 - A conferência visual é parcial: névoa, locais no mapa, painel de sobreviventes e textos do
@@ -51,9 +51,7 @@ Pendências conhecidas das etapas feitas:
 - A névoa só registra o que já foi explorado: zumbis e animais aparecem em qualquer área
   explorada, mesmo sem ninguém por perto.
 - Uma expedição faz uma viagem por ordem e cada pessoa traz um único tipo de recurso.
-- Recusar sobreviventes não tem custo; a consequência entra com a moral (etapa 6).
 - Crianças que chegam com um grupo não têm vínculo de parentesco com os adultos dele.
-- Fumaça não existe como fonte de atração; só barulho de trabalho, luz das casas à noite e tiros.
 - O ensino é abstrato: basta quem sabe estar vivo, não precisa estar presente. Estuda-se ao
   lado de uma casa; não existe escola.
 - Um livro interrompido (sono, ataque) recomeça do zero.
@@ -68,14 +66,27 @@ Pendências conhecidas das etapas feitas:
   As regras das etapas 4 e 5 já ficam à parte, em `src/sim/exploration.gd` e
   `src/sim/knowledge.gd`, como funções estáticas sobre o estado; o mesmo formato serve para
   a divisão.
-- Lenha ainda não é consumida; a madeira só tem meta de estoque. O consumo entra com as
-  estações (etapa 6), quando houver consequência para a falta.
-- As funções padrão de uma criança não mudam sozinhas quando ela vira adulta (etapa 6).
+- Partida longa por script (`tests/long_game.gd`, semente 12345): 150 pessoas no dia 167
+  (ano 14), com 24 encontradas, 119 que chegaram, 67 nascidas e 64 mortes (57 por zumbis,
+  7 por exaustão). Tick médio de 3,0 ms com 157 pessoas e 190 zumbis (15% do segundo a 5x),
+  com um pico isolado de 22 ms. Só essa semente foi jogada.
+- Nessa partida quase metade da comunidade final é criança (72 de 150), a sucata termina
+  zerada e as mortes por exaustão não foram investigadas.
+- O balanceamento do arco se limitou ao que essa partida exigiu: teto de 500 zumbis no mapa,
+  zumbis que apodrecem em 10 dias, hordas que saem pelo lado oposto, raio de coleta que
+  cresce com a comunidade e grupos de sobreviventes maiores em comunidades maiores. Os
+  estágios (família, abrigo, assentamento, comunidade, vila) não têm marcos próprios.
+- A moral só afeta a velocidade de coleta, a chegada de sobreviventes, os nascimentos e a
+  deserção.
+- Bebês comem, andam e fogem como qualquer pessoa; só não trabalham.
+- Na interface de gestão, o aviso do topo se sobrepõe à lista de pessoas quando ela está
+  aberta, e a lista só foi vista em captura de tela, sem cliques.
 
 Testes, a partir da pasta do projeto:
 
     godot --headless --path . -s res://tests/sim_smoke.gd
     godot --headless --path . -s res://tests/load_test.gd
+    godot --headless --path . -s res://tests/long_game.gd    (critério da etapa 6; leva uns 8 minutos)
 
 ### Etapa 0 — Fundação para escala
 - Mapa 256x256 com terreno em blocos e limites de câmera.

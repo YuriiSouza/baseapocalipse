@@ -226,14 +226,17 @@ static func make_offer(s: GameState, count: int, poi_id: int, lifetime: int) -> 
 
 ## Every dawn there is a chance that people looking for shelter reach the base.
 static func arrivals(s: GameState) -> void:
-	if s.people.is_empty() or s.day() < Defs.ARRIVAL_FIRST_DAY:
+	if s.people.is_empty() or s.day() < Defs.ARRIVAL_FIRST_DAY or s.people.size() >= Defs.POPULATION_CAP:
 		return
 	for offer: Dictionary in s.offers:
 		if offer["poi"] < 0:
 			return  # one group at the door at a time
-	if hash(s.tick * 53 + 11) % 100 >= Defs.ARRIVAL_CHANCE:
+	# Word gets around about a place where people live well.
+	if hash(s.tick * 53 + 11) % 100 >= Defs.ARRIVAL_CHANCE * (0.5 + s.morale):
 		return
-	make_offer(s, 1 + hash(s.tick * 71 + 5) % 3, -1, Defs.ARRIVAL_OFFER_TICKS)
+	@warning_ignore("integer_division")
+	var extra := s.people.size() / Defs.ARRIVAL_PEOPLE_PER_EXTRA
+	make_offer(s, mini(Defs.ARRIVAL_GROUP_MAX, 1 + hash(s.tick * 71 + 5) % 3 + extra), -1, Defs.ARRIVAL_OFFER_TICKS)
 	s.events.append("Sobreviventes pedem abrigo")
 
 
@@ -273,6 +276,7 @@ static func accept(s: GameState, offer_id: int) -> bool:
 	if poi != null:
 		s.order_move(ids, door)
 	s.offers.erase(offer)
+	Society.shock(s, Defs.MORALE_WELCOME)
 	if group.size() == 1:
 		s.events.append("%s %s se juntou à comunidade" % [group[0]["first_name"], group[0]["surname"]])
 	else:
@@ -284,6 +288,7 @@ static func refuse(s: GameState, offer_id: int) -> void:
 	var offer := _find_offer(s, offer_id)
 	if not offer.is_empty():
 		s.offers.erase(offer)
+		Society.shock(s, Defs.MORALE_REFUSAL)
 
 
 static func _find_offer(s: GameState, offer_id: int) -> Dictionary:

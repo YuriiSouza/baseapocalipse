@@ -29,6 +29,10 @@ func _init() -> void:
 	_test_skills()
 	_test_knowledge()
 	_test_teaching()
+	_test_seasons()
+	_test_morale()
+	_test_generations()
+	_test_hordes()
 	_test_save_load()
 	print("FAILED: %d" % _failures if _failures > 0 else "ALL OK")
 	quit(1 if _failures > 0 else 0)
@@ -1046,7 +1050,7 @@ func _test_teaching() -> void:
 	var kids := _by_age(s, true)
 	var master := adults[0]
 	var pupil := kids[0]
-	for kind: String in ["food", "water"]:
+	for kind: String in ["food", "water", "wood"]:
 		s.stockpile[kind] = 5000
 	for skill in Defs.SKILLS:
 		for p: SimPerson in s.people.values():
@@ -1108,6 +1112,233 @@ func _test_teaching() -> void:
 	_check(with_books >= 3, "some places on the map have books (%d)" % with_books)
 
 
+func _test_seasons() -> void:
+	print("-- seasons and firewood")
+	var s := _manual(_new_game())
+	var seen := []
+	for d in [1, 3, 4, 7, 10, 12, 13]:
+		s.tick = Defs.DAY_TICKS * (d - 1)
+		seen.append(s.season())
+	_check(seen == [0, 0, 1, 2, 3, 3, 0], "a year has four seasons of %d days, starting in spring" % (Defs.DAYS_PER_YEAR / 4))
+
+	s = _manual(_new_game())
+	s.stockpile["food"] = 5000
+	s.stockpile["water"] = 5000
+	s.stockpile["wood"] = 100
+	for d in range(2, 6):
+		_dawn(s, d)
+	_check(s.stockpile["wood"] == 100 - 2 and not s.heating, "little firewood is burned in spring and none in summer (%d left)" % s.stockpile["wood"])
+	_dawn(s, 10)
+	var before: int = s.stockpile["wood"]
+	_dawn(s, 11)
+	_check(before - s.stockpile["wood"] == 4 and s.heating and not s.cold, "in winter each person burns a log a day")
+	s.stockpile["wood"] = 0
+	s.events.clear()
+	_dawn(s, 12)
+	_check(s.cold and s.events.has("Acabou a lenha: a comunidade passa frio"), "with no firewood in winter the community goes cold")
+	_run(s, Defs.DAY_TICKS - 10)
+	var worst := 1.0
+	for p: SimPerson in s.people.values():
+		worst = minf(worst, p.health)
+	_check(worst < 0.8 and s.people.size() == 4, "the cold costs health (%.2f)" % worst)
+	_dawn(s, 13)
+	_check(not s.cold, "spring ends the cold")
+	_check(s.need("wood") > 0.9, "the wood target covers a winter of firewood")
+
+	# Nothing is planted in winter.
+	s = _new_game()
+	for kind: String in ["food", "water", "wood", "scrap"]:
+		s.stockpile[kind] = 5000
+	var garden := _built(s, "garden", _home(s) + Vector2i(-3, 3))
+	s.tick = Defs.DAY_TICKS * 10 - 600  # evening of the last day of autumn
+	for p: SimPerson in s.people.values():
+		p.energy = Defs.TIRED
+	_run(s, Defs.DAY_TICKS + 600)
+	_check(s.season() == 3 and garden.is_fallow(), "a plot is left alone through the winter")
+	s.tick = Defs.DAY_TICKS * 12
+	_run(s, 900)
+	_check(s.season() == 0 and garden.ripe_tick > 0, "and planted when spring comes")
+
+
+func _test_morale() -> void:
+	print("-- morale")
+	var s := _manual(_new_game())
+	_check(is_equal_approx(s.morale, Defs.MORALE_START), "morale starts at %.1f" % Defs.MORALE_START)
+	var good := Society.morale_target(s)
+	s.stockpile["food"] = 0
+	var hungry := Society.morale_target(s)
+	s.cold = true
+	_check(good > 0.8 and hungry < good - 0.25 and Society.morale_target(s) < hungry, "food, beds and warmth set where morale is heading (%.2f, %.2f)" % [good, hungry])
+	s.cold = false
+	s.stockpile["food"] = 5000
+	s.stockpile["water"] = 5000
+	s.stockpile["wood"] = 5000
+	_dawn(s, 2)
+	var day2 := s.morale
+	_dawn(s, 8)
+	_check(day2 > Defs.MORALE_START and s.morale > day2 and s.morale <= good, "morale moves towards it day by day (%.2f, %.2f)" % [day2, s.morale])
+	_check(Society.work_factor(s) > 1.0, "a content community works faster")
+	var before := s.morale
+	s._kill(_by_age(s, true)[0], "zumbis")
+	_check(s.morale < before and Society.morale_target(s) < good, "a death hurts morale, and weighs on it for days")
+	before = s.morale
+	Exploration.make_offer(s, 2, -1, 100)
+	s.refuse_offer(s.offers[0]["id"])
+	_check(s.morale < before, "so does turning people away")
+
+	# At rock bottom, people who have nobody here walk away.
+	s = _manual(_new_game())
+	var home := _home(s)
+	s.stockpile["wood"] = 5000
+	_built(s, "house", home + Vector2i(-4, 3))
+	var loner := s.spawn_person(home + Vector2i(3, 3))
+	var other := s.spawn_person(home + Vector2i(4, 3))
+	other.sex = loner.sex  # so the two do not pair up
+	_manual(s)
+	s.stockpile["food"] = 0
+	s.stockpile["water"] = 0
+	s.morale = 0.0
+	s.events.clear()
+	_dawn(s, 2)
+	_check(s.people.size() == 5 and s.memorial.is_empty(), "with morale at the bottom someone leaves")
+	_check(s.events.any(func(e: String) -> bool: return e.contains("foi embora")), "which is announced")
+	_dawn(s, 3)
+	_dawn(s, 4)
+	_check(s.people.size() == 4 and not s.people.has(loner.id) and not s.people.has(other.id), "the family stays to the end")
+	_check(Society.work_factor(s) < 0.9, "and a miserable community works slowly")
+
+
+func _test_generations() -> void:
+	print("-- couples, births, growing up")
+	var s := _manual(_new_game())
+	var home := _home(s)
+	for kind: String in ["food", "water", "wood", "scrap"]:
+		s.stockpile[kind] = 100000
+	_built(s, "house", home + Vector2i(-4, 3))
+	_built(s, "house", home + Vector2i(-4, 6))
+	var man := s.add_person(home + Vector2i(3, 3), "Paulo", "Lima", "m", 25.0)
+	var woman := s.add_person(home + Vector2i(4, 3), "Vera", "Gomes", "f", 24.0)
+	_manual(s)
+	var day := 2
+	while day < 40 and woman.spouse != man.id:
+		_dawn(s, day)
+		day += 1
+	_check(woman.spouse == man.id and man.spouse == woman.id, "two single adults become a couple (day %d)" % day)
+	_check(s.events.has("Vera e Paulo agora são um casal"), "which is announced")
+	var kids := _by_age(s, true)
+	_check(Society._related(kids[0], kids[1]) and Society._related(kids[0], _by_age(s, false)[0]) and not Society._related(man, woman),
+		"relatives do not pair up")
+
+	var people := s.people.size()
+	while day < 120 and s.people.size() == people:
+		_dawn(s, day)
+		day += 1
+	var baby: SimPerson = null
+	for p: SimPerson in s.people.values():
+		if p.birth_day > 0:
+			baby = p
+	_check(baby != null and s.people.has(baby.mother) and s.people.has(baby.father), "a couple has a child (day %d)" % day)
+	var mother: SimPerson = s.people[baby.mother]
+	_check(baby.surname == (s.people[baby.father] as SimPerson).surname and mother.last_birth == baby.birth_day and mother.pregnant_until == 0,
+		"with the father's surname, born on the day due")
+	_check(not baby.jobs.values().has(true), "a baby does no work")
+	_check(s.events.any(func(e: String) -> bool: return e.begins_with("Nasceu %s" % baby.full_name())), "the birth is announced")
+
+	# No room, no children.
+	var s2 := _manual(_new_game())
+	for kind: String in ["food", "water", "wood"]:
+		s2.stockpile[kind] = 100000
+	for d in range(2, 80):
+		_dawn(s2, d)
+	_check(s2.people.size() == 4, "with every bed taken no children are born")
+
+	# Growing up: chores at 6, adult work at 16, and learning from the parents on the way.
+	mother.skills["farming"] = 4.0
+	baby.birth_day = s.day() + 1 - roundi(Defs.WORK_AGE * Defs.DAYS_PER_YEAR)
+	_dawn(s, s.day() + 1)
+	_check(baby.jobs["forage"] and baby.jobs["study"] and not baby.jobs["hunt"], "at %d a child starts helping" % Defs.WORK_AGE)
+	var today := s.day()
+	var knew: float = baby.skills["farming"]
+	for d in range(today + 1, today + 11):
+		_dawn(s, d)
+	_check(is_equal_approx(baby.skills["farming"] - knew, 10 * Defs.CHILD_LEARN_PER_DAY), "and picks up what the parents know (%.2f)" % baby.skills["farming"])
+	baby.birth_day = s.day() + 1 - roundi(Defs.ADULT_AGE * Defs.DAYS_PER_YEAR)
+	s.events.clear()
+	_dawn(s, s.day() + 1)
+	_check(baby.jobs["hunt"] and baby.jobs["guard"] and not baby.is_child(s.day()), "at %d the child takes on adult work" % Defs.ADULT_AGE)
+	_check(s.events.any(func(e: String) -> bool: return e.contains("agora é adult")), "which is announced")
+
+	# Old age.
+	var elder := s.add_person(home + Vector2i(5, 5), "Teresa", "Lima", "f", 90.0)
+	today = s.day()
+	for d in range(today + 1, today + 80):
+		_dawn(s, d)
+	_check(not s.people.has(elder.id) and s.memorial.any(func(m: Dictionary) -> bool: return m["cause"] == "velhice"), "the very old die of old age")
+
+
+func _test_hordes() -> void:
+	print("-- hordes and events")
+	var s := _manual(_new_game())
+	s.zombies_enabled = true
+	s.stockpile["food"] = 100000
+	s.stockpile["water"] = 100000
+	s.next_horde_day = 3
+	_dawn(s, 2)
+	_check(s.events.any(func(e: String) -> bool: return e.begins_with("Uma horda foi avistada")), "a horde is announced a day ahead")
+	s.clear_zombies()
+	s.tick = Defs.DAY_TICKS * 2 + GameState.DUSK_TICK - 1
+	s.step()
+	var marching := 0
+	var from := Vector2.ZERO
+	var to := Vector2.ZERO
+	for z: SimZombie in s.zombies.values():
+		if z.goal != SimZombie.NO_GOAL:
+			marching += 1
+			from = z.pos
+			to = z.goal
+	_check(marching == Defs.HORDE_BASE + 1, "the horde comes in at dusk (%d zombies)" % marching)
+	_check(from.distance_to(to) > s.width * 0.9, "bound for the other side of the map")
+	_check(s.next_horde_day == 3 + Defs.HORDE_INTERVAL, "the next one comes in a year")
+	# Family asleep indoors, so nothing draws the horde off its way.
+	var walker: SimZombie = null
+	for z: SimZombie in s.zombies.values():
+		if z.migrating:
+			walker = z
+	var horde := s.zombies.size()
+	s._zombie_index.move(walker.id, walker.pos, walker.goal + Vector2(0.5, 0.5))
+	walker.pos = walker.goal + Vector2(0.5, 0.5)
+	_run(s, 3)
+	_check(not s.zombies.has(walker.id) and s.zombies.size() == horde - 1, "a horde zombie that reaches the far side leaves the map")
+	var old := s.spawn_zombie(_home(s) + Vector2i(60, 60))
+	var attacker := s.spawn_zombie(_home(s) + Vector2i(62, 60))
+	_dawn(s, s.day() + Defs.ZOMBIE_LIFE_DAYS)
+	_check(s.zombies.has(old.id), "zombies last %d days" % Defs.ZOMBIE_LIFE_DAYS)
+	attacker.siege = (s.buildings.values()[0] as SimBuilding).id  # busy tearing the house down
+	_dawn(s, s.day() + 1)
+	_check(not s.zombies.has(old.id) and s.zombies.has(attacker.id), "then rot away, unless they are attacking")
+	s.clear_zombies()
+	for cell in s._spread(_home(s) + Vector2i(0, 80), Defs.ZOMBIE_CAP - 3):
+		s.spawn_zombie(cell)
+	s.next_horde_day = s.day()
+	s.tick = Defs.DAY_TICKS * (s.day() - 1) + GameState.DUSK_TICK - 1
+	s.step()
+	_check(s.zombies.size() <= Defs.ZOMBIE_CAP, "the map never holds more than %d zombies (%d)" % [Defs.ZOMBIE_CAP, s.zombies.size()])
+	s.tick = Defs.DAY_TICKS * (Defs.DAYS_PER_YEAR * 5 + 2) + GameState.DUSK_TICK - 1
+	s.next_horde_day = s.day()
+	s.clear_zombies()
+	s.step()
+	_check(s.zombies.size() > marching * 2, "hordes grow with the years (%d in year 6)" % s.zombies.size())
+
+	s = _manual(_new_game())
+	s.events_enabled = true
+	s.stockpile["medicine"] = 0
+	var animals := s.animals.size()
+	for d in range(2, 120):
+		_dawn(s, d)
+	_check(s.events.any(func(e: String) -> bool: return e.contains("adoeceu")), "now and then someone falls ill")
+	_check(s.events.has("Uma manada passa perto da base") and s.animals.size() > animals, "or a herd comes by")
+
+
 func _test_save_load() -> void:
 	print("-- save / load")
 	var s := _new_game()
@@ -1124,6 +1355,9 @@ func _test_save_load() -> void:
 	s.spawn_zombie(home + Vector2i(-30, 4))
 	# An expedition on its way, a group waiting for an answer and survivors arriving.
 	s.arrivals_enabled = true
+	s.events_enabled = true
+	s.next_horde_day = 2
+	_by_age(s, false)[1].pregnant_until = 2
 	s.library["farming"] = 5
 	_built(s, "workshop", home + Vector2i(4, 6))
 	_known_place(s).survivors = 2
@@ -1150,6 +1384,7 @@ func _test_save_load() -> void:
 func _new_game() -> GameState:
 	var s := GameState.new_game(SEED)
 	s.locks_enabled = false
+	s.events_enabled = false
 	s.zombies_enabled = false
 	s.arrivals_enabled = false
 	s.clear_zombies()
@@ -1198,6 +1433,12 @@ func _ids(list: Array[SimPerson]) -> Array[int]:
 	for p in list:
 		out.append(p.id)
 	return out
+
+
+## Jumps to the dawn of the given day and runs the tick on which the daily rules apply.
+func _dawn(s: GameState, day: int) -> void:
+	s.tick = Defs.DAY_TICKS * (day - 1) - 1
+	s.step()
 
 
 func _run(s: GameState, ticks: int) -> void:

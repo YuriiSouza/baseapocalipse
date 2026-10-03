@@ -28,6 +28,8 @@ func _ready() -> void:
 	_hud.build_requested.connect(_controller.begin_placement)
 	_hud.job_toggled.connect(_controller.set_job)
 	_hud.offer_answered.connect(_answer_offer)
+	_hud.people_picked.connect(_controller.select_people)
+	_hud.focus_requested.connect(_focus_person)
 	_hud.save_requested.connect(save_game)
 	_hud.load_requested.connect(load_game)
 	_hud.new_game_requested.connect(new_game)
@@ -97,6 +99,12 @@ func load_game() -> void:
 		return
 	_start(GameState.from_dict(data))
 	_hud.show_message("Jogo carregado")
+
+
+func _focus_person(person_id: int) -> void:
+	var p: SimPerson = state.people.get(person_id)
+	if p != null:
+		_camera.position = Iso.to_world(p.pos)
 
 
 func _answer_offer(offer_id: int, accepted: bool) -> void:

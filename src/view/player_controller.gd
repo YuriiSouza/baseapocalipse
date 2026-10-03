@@ -29,6 +29,13 @@ func clear_selection() -> void:
 	dragging = false
 
 
+## Selection made from the list of people rather than on the map.
+func select_people(ids: Array[int]) -> void:
+	selected_people = ids
+	selected_building = -1
+	selected_poi = -1
+
+
 func begin_placement(def_id: String) -> void:
 	placing = def_id
 

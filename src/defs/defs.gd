@@ -76,8 +76,42 @@ const START_HOUR := 6.0  # a day number starts at dawn
 const NIGHT_START := 21.0
 const NIGHT_END := 5.0
 
+const SEASON_NAMES: Array[String] = ["Primavera", "Verão", "Outono", "Inverno"]
+## Wood each person burns a day, by season. Nothing can be planted in winter.
+const FIREWOOD_PER_PERSON: Array[float] = [0.25, 0.0, 0.25, 1.0]
+const DAMAGE_COLD := 0.25  # health per day in a winter without firewood
+
 # --- People ---
 const ADULT_AGE := 16.0
+const WORK_AGE := 6.0  # younger children do no work at all
+const LEARN_AGE := 4.0  # from here children pick things up from their parents
+const CHILD_LEARN_PER_DAY := 0.03  # skill levels
+const OLD_AGE := 65.0
+const OLD_AGE_DEATH_CHANCE := 0.4  # percent a day for each year past OLD_AGE
+const POPULATION_CAP := 160  # no births or arrivals beyond this
+
+# --- Couples and births ---
+const COUPLE_AGE := 18.0
+const COUPLE_AGE_GAP := 15.0  # years
+const COUPLE_CHANCE := 20.0  # percent a day for two singles to pair up
+const MAX_MOTHER_AGE := 42.0
+const BIRTH_CHANCE := 10.0  # percent a day for a couple with room and the mood for it
+const PREGNANCY_DAYS := 9
+const BIRTH_GAP_DAYS := 12
+const BIRTH_MIN_MORALE := 0.4
+
+# --- Morale: 0 to 1, of the community as a whole ---
+const MORALE_START := 0.6
+const MORALE_DRIFT := 0.25  # share of the way to its target it moves each day
+const MORALE_DEATH := -0.06
+const MORALE_BIRTH := 0.05
+const MORALE_REFUSAL := -0.04  # turning survivors away
+const MORALE_WELCOME := 0.02
+const MOURNING_DAYS := 6  # a death weighs on morale this long
+const MORALE_WORK_MIN := 0.85  # gathering speed at morale 0
+const MORALE_WORK_MAX := 1.1  # and at morale 1
+const DESERTION_MORALE := 0.2  # below this, people start leaving
+const DESERTION_MIN_PEOPLE := 4
 const PERSON_SPEED := 0.15  # cells per tick
 const CARRY_CAPACITY := 10
 const GATHER_TICKS_PER_UNIT := 6
@@ -114,10 +148,13 @@ const ADULT_ONLY_WORK: Array[String] = ["build", "hunt", "craft", "guard"]
 ## Stock the community tries to keep. Work on a resource stops once its target is met.
 const FOOD_TARGET_DAYS := 4
 const WATER_TARGET_DAYS := 2
-const WOOD_TARGET := 80
+const WOOD_TARGET := 80  # plus firewood for a whole winter
 const SCRAP_TARGET := 40
-## How far from a drop-off people look for something to gather, in cells.
+## How far from a drop-off people look for something to gather, in cells: a bigger
+## community ranges further.
 const WORK_RADIUS := 35
+const WORK_RADIUS_PER_PERSON := 0.5
+const WORK_RADIUS_MAX := 100
 const WORK_DECISIONS_PER_TICK := 6
 ## How long someone with nothing to do waits before looking again.
 const IDLE_RETRY_TICKS := 50
@@ -173,13 +210,15 @@ const ZOMBIE_STRUCTURE_DAMAGE := 3  # hit points per hit on a building
 ## A zombie this close to a building with people inside starts tearing it down.
 const ZOMBIE_SMELL := 4.0
 const ZOMBIE_DETOUR_TICKS := 20  # doubles each time it is blocked again, up to 5 times
-const ZOMBIE_CAP := 500
+const ZOMBIE_CAP := 500  # on the whole map, hordes included
+const ZOMBIE_LIFE_DAYS := 10  # after this a zombie that is not attacking rots away
 const ZOMBIES_AT_START := 12
 const ZOMBIE_START_DISTANCE := 70.0  # cells from the family home
 # Zombies arriving at the map edge every dusk: base + growth * day + per_person * people.
 const ZOMBIE_DAILY_BASE := 1.0
 const ZOMBIE_DAILY_GROWTH := 0.1
-const ZOMBIE_PER_PERSON := 0.1
+const ZOMBIE_DAILY_GROWTH_MAX := 8.0  # the most that the passing days add
+const ZOMBIE_PER_PERSON := 0.08
 
 # --- Exploration ---
 const FOG_BLOCK := 4  # cells; the fog lifts a block at a time
@@ -204,14 +243,32 @@ const CAMP_SKIP_STEPS := 40
 # --- Survivors ---
 const ARRIVAL_FIRST_DAY := 3
 const ARRIVAL_CHANCE := 15  # percent, each dawn
+const ARRIVAL_PEOPLE_PER_EXTRA := 25  # groups get one person bigger for each of these many
+const ARRIVAL_GROUP_MAX := 6
 const ARRIVAL_OFFER_TICKS := DAY_TICKS  # how long a group at the door waits for an answer
 const FOUND_OFFER_TICKS := 3 * DAY_TICKS  # people found at a place wait longer
+
+# --- Hordes and events ---
+const HORDE_FIRST_DAY := 18
+const HORDE_INTERVAL := 12  # days; a day shorter each year
+const HORDE_MIN_INTERVAL := 8
+const HORDE_BASE := 8  # zombies
+const HORDE_PER_YEAR := 4
+const HORDE_PEOPLE_PER_ZOMBIE := 4  # one more for each of these many people
+const HORDE_MAX := 120
+const HORDE_SPREAD := 40  # cells from the centre of the map its route may pass
+const EVENTS_FIRST_DAY := 6
+const ILLNESS_CHANCE := 6  # percent, each dawn
+const HERD_CHANCE := 5
+const HERD_SIZE := 6
+const HERD_DISTANCE := 25.0  # cells from the centre of the map
 
 # --- Noise: what draws zombies that cannot see anyone ---
 const NOISE_BUCKET := 16  # cells
 const NOISE_PERSON := 1.0  # someone awake and busy, outdoors
 const NOISE_HOME := 0.3  # a building people live in
 const NOISE_LIGHT := 0.7  # added to homes at night
+const NOISE_SMOKE := 0.5  # added to homes on days when firewood is burned
 const NOISE_SHOT := 4.0
 const NOISE_SHOT_DECAY := 0.98  # per tick
 const HEAR_RADIUS := 4  # buckets

@@ -5,7 +5,7 @@ extends RefCounted
 ## through the order_* / place_building / set_job methods.
 
 const TICKS_PER_SECOND := 10
-const SAVE_VERSION := 7
+const SAVE_VERSION := 8
 const NO_CELL := Vector2i(-1, -1)
 ## Tick of the day at which night falls and new zombies reach the map edge.
 const DUSK_TICK := int((Defs.NIGHT_START - Defs.START_HOUR) / 24.0 * Defs.DAY_TICKS)
@@ -29,6 +29,16 @@ var explored := PackedByteArray()
 ## Groups asking to join: {"id", "poi" (-1 if they came to the base), "expires", "people"},
 ## each of the people a {"first_name", "surname", "sex", "age", "skills"}.
 var offers := []
+## Mood of the community, 0 to 1.
+var morale := Defs.MORALE_START
+## Winter with no firewood today: everyone loses health.
+var cold := false
+## Firewood was burned today, so there is smoke over the homes.
+var heating := false
+var last_death_day := -1000
+var next_horde_day := Defs.HORDE_FIRST_DAY
+## False stops illness and herds from happening.
+var events_enabled := true
 ## Books the community has: skill -> level of the best one.
 var library := {}
 ## False lets anything be built or made, whatever the community knows.
@@ -241,6 +251,11 @@ func is_night() -> bool:
 	return h >= Defs.NIGHT_START or h < Defs.NIGHT_END
 
 
+## 0 spring, 1 summer, 2 autumn, 3 winter.
+func season() -> int:
+	return Almanac.season(self)
+
+
 func year() -> int:
 	@warning_ignore("integer_division")
 	return 1 + (day() - 1) / Defs.DAYS_PER_YEAR
@@ -318,7 +333,7 @@ func need(kind: String) -> float:
 		"water":
 			target = people.size() * Defs.RATIONS_PER_DAY * Defs.WATER_TARGET_DAYS
 		"wood":
-			target = Defs.WOOD_TARGET
+			target = Defs.WOOD_TARGET + people.size() * Defs.FIREWOOD_PER_PERSON[3] * Defs.DAYS_PER_YEAR / 4
 		"scrap":
 			target = Defs.SCRAP_TARGET
 	if target <= 0.0:
@@ -465,7 +480,7 @@ func add_person(cell: Vector2i, first_name: String, surname: String, sex: String
 	for skill in Defs.SKILLS:
 		p.skills[skill] = 0.0
 	for work in Defs.WORK_TYPES:
-		p.jobs[work] = age_years >= Defs.ADULT_AGE or work not in Defs.ADULT_ONLY_WORK
+		p.jobs[work] = age_years >= Defs.ADULT_AGE or (age_years >= Defs.WORK_AGE and work not in Defs.ADULT_ONLY_WORK)
 	p.pos = Vector2(cell) + Vector2(0.5, 0.5)
 	p.prev_pos = p.pos
 	_add_person(p)
@@ -483,6 +498,7 @@ func spawn_person(cell: Vector2i) -> SimPerson:
 func spawn_zombie(cell: Vector2i) -> SimZombie:
 	var z := SimZombie.new()
 	z.id = _take_id()
+	z.spawn_day = day()
 	z.pos = Vector2(cell) + Vector2(0.5, 0.5)
 	z.prev_pos = z.pos
 	zombies[z.id] = z
@@ -529,10 +545,13 @@ func step() -> void:
 		Exploration.expire_offers(self)
 	if time_of_day == 0:
 		_respawn_animals()
+		Almanac.daily(self)
+		Society.daily(self)
 		if arrivals_enabled:
 			Exploration.arrivals(self)
 	elif time_of_day == DUSK_TICK and zombies_enabled:
 		_zombies_arrive()
+		Almanac.dusk(self)
 
 
 ## Start-of-tick pass over zombies and buildings: who is attacking, which buildings have
@@ -550,7 +569,8 @@ func _survey() -> void:
 		events.append("Zumbis atacando!")
 
 	_noise.fill(0.0)
-	var home_noise := Defs.NOISE_HOME + (Defs.NOISE_LIGHT if is_night() else 0.0)
+	var home_noise := Defs.NOISE_HOME + (Defs.NOISE_LIGHT if is_night() else 0.0) \
+			+ (Defs.NOISE_SMOKE if heating else 0.0)
 	_homes_in_use.clear()
 	for b: SimBuilding in buildings.values():
 		if b.ripe_tick > 0 and tick >= b.ripe_tick:
@@ -608,6 +628,9 @@ func _tick_needs(p: SimPerson) -> bool:
 	if p.wounded:
 		damage += Defs.WOUND_DRAIN
 		cause = "infecção"
+	if cold:
+		damage += Defs.DAMAGE_COLD
+		cause = "frio"
 	if p.energy <= 0.0:
 		damage += Defs.DAMAGE_EXHAUSTION
 		cause = "exaustão"
@@ -636,12 +659,19 @@ func _hurt_person(p: SimPerson, amount: float, cause: String) -> void:
 
 func _kill(p: SimPerson, cause: String) -> void:
 	var known := Knowledge.levels(self)
-	_go_outside(p)
-	_people_index.remove(p.id, p.pos)
-	people.erase(p.id)
+	_remove_person(p)
+	last_death_day = day()
+	Society.shock(self, Defs.MORALE_DEATH)
 	memorial.append({"name": p.full_name(), "age": int(p.age(day())), "cause": cause, "day": day()})
 	events.append("%s morreu: %s" % [p.full_name(), cause])
 	Knowledge.announce_loss(self, known, p.first_name)
+
+
+## Takes someone out of the game, whether dead or gone.
+func _remove_person(p: SimPerson) -> void:
+	_go_outside(p)
+	_people_index.remove(p.id, p.pos)
+	people.erase(p.id)
 
 
 func _tick_person(p: SimPerson) -> void:
@@ -691,9 +721,10 @@ func _tick_person(p: SimPerson) -> void:
 				p.carry_kind = p.gather_kind
 				p.carry_amount = 0
 			var effort := Defs.CHILD_WORK_FACTOR if p.is_child(day()) else 1.0
+			var pace := effort * Society.work_factor(self)
 			var skill := _gather_skill(p)
 			p.work_ticks += 1
-			if p.work_ticks >= Defs.GATHER_TICKS_PER_UNIT / (effort * Knowledge.speed(p, skill)):
+			if p.work_ticks >= Defs.GATHER_TICKS_PER_UNIT / (pace * Knowledge.speed(p, skill)):
 				p.work_ticks = 0
 				p.carry_amount += 1
 				Knowledge.practice(p, skill, Defs.PRACTICE_PER_TICK * Defs.GATHER_TICKS_PER_UNIT)
@@ -744,7 +775,7 @@ func _tick_person(p: SimPerson) -> void:
 			elif site.is_damaged():
 				site.hp = mini(site.get_def().max_hp, site.hp + Defs.REPAIR_PER_TICK * (1 + _skill_bonus(p, "building")))
 				Knowledge.practice(p, "building", Defs.PRACTICE_PER_TICK)
-			elif site.is_fallow():
+			elif site.is_fallow() and not Almanac.is_winter(self):
 				site.work += 1 + _skill_bonus(p, "farming")
 				Knowledge.practice(p, "farming", Defs.PRACTICE_PER_TICK)
 				if site.work >= Defs.PLANT_TICKS:
@@ -1087,7 +1118,12 @@ func _shoot(p: SimPerson, z: SimZombie, origin: Vector2) -> void:
 
 func _hurt_zombie(z: SimZombie, amount: float) -> void:
 	z.health -= amount
-	if z.health <= 0.0 and zombies.has(z.id):
+	if z.health <= 0.0:
+		_remove_zombie(z)
+
+
+func _remove_zombie(z: SimZombie) -> void:
+	if zombies.has(z.id):
 		zombies.erase(z.id)
 		_zombie_index.remove(z.id, z.pos)
 
@@ -1280,8 +1316,9 @@ func _find_work_source(p: SimPerson, kind: String) -> Vector2i:
 	if base == null:
 		return NO_CELL
 	var found := nearest_source(hint, kind)
-	if found == NO_CELL or (found - base.cell).length() > Defs.WORK_RADIUS:
-		found = nearest_source(base.cell, kind, Defs.WORK_RADIUS)
+	var reach := mini(Defs.WORK_RADIUS_MAX, Defs.WORK_RADIUS + int(Defs.WORK_RADIUS_PER_PERSON * (people.size() - 4)))
+	if found == NO_CELL or (found - base.cell).length() > reach:
+		found = nearest_source(base.cell, kind, reach)
 		if found == NO_CELL:
 			_no_source_until[kind] = tick + Defs.NO_SOURCE_TICKS
 			return NO_CELL
@@ -1327,7 +1364,8 @@ func _refresh_work_cache() -> void:
 		if not b.is_complete() or b.is_damaged():
 			_sites.append(b)
 		elif b.is_fallow():
-			_fallow.append(b)
+			if not Almanac.is_winter(self):
+				_fallow.append(b)
 		elif b.stock > 0:
 			_ripe.append(b)
 
@@ -1343,6 +1381,7 @@ func _tick_zombie(z: SimZombie) -> void:
 	if chased != null and chased.inside >= 0:
 		z.goal = chased.pos  # went indoors: head for where it was last seen
 		z.lured = true
+		z.migrating = false
 		z.target = -1
 		chased = null
 	var wall: SimBuilding = buildings.get(z.siege)
@@ -1371,6 +1410,9 @@ func _tick_zombie(z: SimZombie) -> void:
 		speed = Defs.ZOMBIE_CHASE_SPEED
 	elif z.goal != SimZombie.NO_GOAL:
 		if z.pos.distance_squared_to(z.goal) < 4.0:
+			if z.migrating:
+				_remove_zombie(z)  # the horde moves on, off the map
+				return
 			z.goal = SimZombie.NO_GOAL
 			z.lured = false
 			z.blocked = 0
@@ -1466,6 +1508,7 @@ func _zombie_listen(z: SimZombie) -> void:
 	var point := (Vector2(found) + Vector2(0.5, 0.5)) * Defs.NOISE_BUCKET + jitter
 	z.goal = point.clamp(Vector2.ONE, Vector2(width - 1, height - 1))
 	z.lured = true
+	z.migrating = false
 
 
 ## Something is in the way. A building gets attacked; anything else is walked around,
@@ -1489,7 +1532,8 @@ func _zombie_blocked(z: SimZombie, purposeful: bool) -> void:
 
 ## More zombies reach the map edge each dusk as the days pass and the community grows.
 func _zombies_arrive() -> void:
-	var count := int(Defs.ZOMBIE_DAILY_BASE + Defs.ZOMBIE_DAILY_GROWTH * day() + Defs.ZOMBIE_PER_PERSON * people.size())
+	var count := int(Defs.ZOMBIE_DAILY_BASE + minf(Defs.ZOMBIE_DAILY_GROWTH_MAX, Defs.ZOMBIE_DAILY_GROWTH * day())
+			+ Defs.ZOMBIE_PER_PERSON * people.size())
 	for i in count:
 		if zombies.size() >= Defs.ZOMBIE_CAP:
 			return
@@ -1846,6 +1890,12 @@ func to_dict() -> Dictionary:
 		"zombies_enabled": zombies_enabled,
 		"arrivals_enabled": arrivals_enabled,
 		"locks_enabled": locks_enabled,
+		"events_enabled": events_enabled,
+		"morale": morale,
+		"cold": cold,
+		"heating": heating,
+		"last_death_day": last_death_day,
+		"next_horde_day": next_horde_day,
 		"library": library.duplicate(),
 		"explored": Marshalls.raw_to_base64(explored),
 		"offers": offers.duplicate(true),
@@ -1877,6 +1927,12 @@ static func from_dict(d: Dictionary) -> GameState:
 	s.zombies_enabled = d["zombies_enabled"]
 	s.arrivals_enabled = d["arrivals_enabled"]
 	s.locks_enabled = d["locks_enabled"]
+	s.events_enabled = d["events_enabled"]
+	s.morale = d["morale"]
+	s.cold = d["cold"]
+	s.heating = d["heating"]
+	s.last_death_day = int(d["last_death_day"])
+	s.next_horde_day = int(d["next_horde_day"])
 	for skill: String in d["library"]:
 		s.library[skill] = int(d["library"][skill])
 	s.explored = Marshalls.base64_to_raw(d["explored"])
